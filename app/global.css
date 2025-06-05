@@ -1,0 +1,163 @@
+/* ───────────────────────────────────
+   ◉ Theme Variables
+──────────────────────────────────── */
+:root {
+  --color-background: #f9fafb;
+  --color-foreground: #111827;
+  --color-card-bg: #ffffff;
+  --color-card-text: #1f2937;
+  --color-shadow: rgba(0, 0, 0, 0.08);
+  --font-sans: 'Inter', 'Arial', sans-serif;
+}
+
+/* ───────────────────────────────────
+   ◉ Base Reset & Layout
+──────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+html, body, #__next {
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-width: 320px;
+}
+
+body, #__next {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  /* padding: 1rem;  remove or comment out */
+}
+/* ───────────────────────────────────
+   ◉ Light Mode Override
+──────────────────────────────────── */
+body.light {
+  --color-background: #f9fafb;
+  --color-foreground: #111827;
+}
+
+body.light .cl-card {
+  background-color: var(--color-card-bg) !important;
+  color: var(--color-card-text) !important;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 12px 32px var(--color-shadow);
+  border-radius: 1rem;
+  transition: box-shadow 0.3s ease, transform 0.2s ease;
+}
+
+body.light .cl-card:hover {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+}
+
+/* ───────────────────────────────────
+   ◉ Clerk Sign-In Card
+──────────────────────────────────── */
+.cl-card {
+  margin: auto !important;
+  width: 100% !important;
+  max-width: 420px;
+  padding: 2rem !important;
+  border-radius: 1rem !important;
+  background-color: var(--color-card-bg) !important;
+  color: var(--color-card-text) !important;
+  box-shadow: 0 10px 25px var(--color-shadow);
+  transition: box-shadow 0.3s ease, transform 0.2s ease;
+}
+
+.cl-card:hover {
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+/* ───────────────────────────────────
+   ◉ Inputs & Form Elements
+──────────────────────────────────── */
+input[type="text"],
+input[type="number"],
+textarea,
+select {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  box-shadow: 0 1px 2px var(--color-shadow);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  background-color: #fff;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+}
+
+/* ───────────────────────────────────
+   ◉ Button Styling
+──────────────────────────────────── */
+button {
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.75rem;
+  background-color: #2563eb;
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 6px rgba(37, 99, 235, 0.4);
+  transition: background-color 0.3s ease, box-shadow 0.3s ease, transform 0.15s ease;
+}
+
+button:hover,
+button:focus {
+  background-color: #1d4ed8;
+  box-shadow: 0 6px 12px rgba(29, 78, 216, 0.6);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+button:active {
+  transform: translateY(0);
+  box-shadow: 0 3px 6px rgba(29, 78, 216, 0.5);
+}
+
+/* ───────────────────────────────────
+   ◉ Optional: Hide Old Forms
+──────────────────────────────────── */
+body.sign-in-page .old-signin-form {
+  display: none !important;
+}
+
+/* ───────────────────────────────────
+   ◉ Dark Mode Support
+──────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #0a0a0a;
+    --color-foreground: #ededed;
+    --color-card-bg: #1f1f1f;
+    --color-card-text: #ededed;
+    --color-shadow: rgba(0, 0, 0, 0.6);
+  }
+
+  .cl-card {
+    background-color: var(--color-card-bg) !important;
+    color: var(--color-card-text) !important;
+    box-shadow: 0 10px 25px var(--color-shadow);
+  }
+
+  .cl-card:hover {
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.8);
+  }
+}
