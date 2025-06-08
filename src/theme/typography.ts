@@ -1,17 +1,14 @@
-import type { TypographyVariantsOptions } from '@mui/material/styles';
+// src/theme/typography.ts
 
-const typography: TypographyVariantsOptions = {
-  fontFamily: "'Public Sans', sans-serif",
-  h1: { fontWeight: 700, fontSize: '3rem' },
-  h2: { fontWeight: 700, fontSize: '2.25rem' },
-  h3: { fontWeight: 700, fontSize: '2rem' },
-  h4: { fontWeight: 700, fontSize: '1.5rem' },
-  h5: { fontWeight: 700, fontSize: '1.25rem' },
-  h6: { fontWeight: 700, fontSize: '1rem' },
-  subtitle1: { fontSize: '1rem' },
-  subtitle2: { fontSize: '0.875rem' },
+import { TypographyOptions } from '@mui/material/styles/createTypography';
+
+export const typography: TypographyOptions = {
+  fontFamily: '"Public Sans", sans-serif',
+  fontWeightRegular: 400,
+  fontWeightMedium: 600,
+  fontWeightBold: 700,
+  h1: { fontWeight: 800, fontSize: '2.5rem' },
+  h2: { fontWeight: 700, fontSize: '2rem' },
   body1: { fontSize: '1rem' },
-  body2: { fontSize: '0.875rem' },
+  // ... add more styles as needed
 };
-
-export default typography;

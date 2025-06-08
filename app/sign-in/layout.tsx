@@ -1,19 +1,45 @@
 'use client';
 
+import { ClerkProvider } from '@clerk/nextjs';
+import { Box, CssBaseline } from '@mui/material';
+import { ThemeModeProvider } from '@/theme/theme-provider';
+
 export default function SignInLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        width: '100vw',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#f3f4f6', // Tailwind bg-gray-100
-        padding: '1rem',
-      }}
-    >
-      <div style={{ maxWidth: 400, width: '100%' }}>{children}</div>
-    </div>
+    <ClerkProvider>
+      <ThemeModeProvider>
+        <CssBaseline />
+
+        {/* Blurred gradient background */}
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            background: 'linear-gradient(135deg, #4e54c8, #8f94fb)',
+            filter: 'blur(160px)',
+            opacity: 0.3,
+            zIndex: -1,
+            transition: 'opacity 0.5s ease',
+          }}
+        />
+
+        {/* Centered sign-in container */}
+        <Box
+          sx={{
+            minHeight: '100vh',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: 'background.default',
+            px: 2,
+          }}
+        >
+          {children}
+        </Box>
+      </ThemeModeProvider>
+    </ClerkProvider>
   );
 }

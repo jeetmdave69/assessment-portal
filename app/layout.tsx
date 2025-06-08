@@ -1,33 +1,25 @@
 // app/layout.tsx
-
-import { ReactNode } from 'react';
+import { ThemeModeProvider } from '@/theme/ThemeModeProvider';
 import { ClerkProvider } from '@clerk/nextjs';
+import { Inter } from 'next/font/google';
 
-import AuthProvider from '../src/auth/AuthProvider';
-import ThemeProvider from '../src/theme/theme-provider';
-import { SettingsProvider } from '../src/components/settings/settings-provider';
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata = {
   title: 'Assessment Portal',
-  description: 'Sign in to your account',
+  description: 'Smart test management',
 };
 
-interface RootLayoutProps {
-  children: ReactNode;
-}
-
-export default function RootLayout({ children }: RootLayoutProps) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="bg-gray-100">
-        <ClerkProvider>
-          <AuthProvider>
-            <SettingsProvider>
-              <ThemeProvider>{children}</ThemeProvider>
-            </SettingsProvider>
-          </AuthProvider>
-        </ClerkProvider>
-      </body>
-    </html>
+    <ClerkProvider>
+      <html lang="en">
+        <body className={inter.className}>
+          <ThemeModeProvider>
+            {children}
+          </ThemeModeProvider>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

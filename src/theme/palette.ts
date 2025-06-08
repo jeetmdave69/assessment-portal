@@ -1,17 +1,22 @@
 import { PaletteOptions } from '@mui/material/styles';
 
-const palette: PaletteOptions = {
+const lightPalette: PaletteOptions = {
   mode: 'light',
   primary: {
     main: '#2065D1',
   },
-  secondary: {
-    main: '#3366FF',
-  },
-  background: {
-    default: '#F9FAFB',
-    paper: '#FFFFFF',
+};
+
+const darkPalette: PaletteOptions = {
+  mode: 'dark',
+  primary: {
+    main: '#2065D1',
   },
 };
 
-export default palette;
+export const palette = {
+  light: lightPalette,
+  dark: darkPalette,
+};
+
+export default lightPalette; // 👈 used by default in createTheme()

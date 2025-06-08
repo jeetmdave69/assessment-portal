@@ -15,10 +15,10 @@ import {
   PaletteMode,
 } from '@mui/material';
 
-import { palette } from '@/theme/palette';
-import { typography } from '@/theme/typography';
-import { components } from '@/theme/components';
-import { shadows } from '@/theme/shadows';
+import { palette } from './palette';
+import { typography } from './typography';
+import { components } from './components';
+import { shadows } from './shadows';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -38,23 +38,19 @@ export const useThemeMode = () => {
 };
 
 export function ThemeModeProvider({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<ThemeMode>('light');
-  const [mounted, setMounted] = useState(false); // 👈 Important
+  const [mode, setMode] = useState<ThemeMode>('dark');
 
+  // Load mode from localStorage on mount
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const storedMode = localStorage.getItem('theme-mode') as ThemeMode;
-      if (storedMode === 'light' || storedMode === 'dark') {
-        setMode(storedMode);
-      }
-      setMounted(true); // ✅ Only render after reading localStorage
+    const storedMode = localStorage.getItem('theme-mode') as ThemeMode;
+    if (storedMode === 'light' || storedMode === 'dark') {
+      setMode(storedMode);
     }
   }, []);
 
+  // Save mode to localStorage on change
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('theme-mode', mode);
-    }
+    localStorage.setItem('theme-mode', mode);
   }, [mode]);
 
   const toggleMode = () => {
@@ -62,24 +58,25 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
   };
 
   const theme = useMemo(() => {
-    const basePalette =
-      mode === 'dark'
-        ? {
-            mode: 'dark' as PaletteMode,
-            primary: { main: '#90caf9' },
-            background: {
-              default: '#121212',
-              paper: '#1e1e1e',
-            },
-            text: {
-              primary: '#ffffff',
-              secondary: '#aaaaaa',
-            },
-          }
-        : {
-            mode: 'light' as PaletteMode,
-            ...palette.light,
-          };
+    const isDark = mode === 'dark';
+
+    const basePalette = isDark
+      ? {
+          mode: 'dark' as PaletteMode,
+          primary: { main: '#90caf9' },
+          background: {
+            default: '#121212',
+            paper: '#1e1e1e',
+          },
+          text: {
+            primary: '#ffffff',
+            secondary: '#aaaaaa',
+          },
+        }
+      : {
+          mode: 'light' as PaletteMode,
+          ...palette.light,
+        };
 
     return createTheme({
       palette: basePalette,
@@ -88,9 +85,6 @@ export function ThemeModeProvider({ children }: { children: ReactNode }) {
       shadows,
     });
   }, [mode]);
-
-  // ✅ Prevent rendering until theme mode is known
-  if (!mounted) return null;
 
   return (
     <ThemeContext.Provider value={{ mode, toggleMode }}>
