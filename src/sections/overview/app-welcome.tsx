@@ -5,12 +5,25 @@ import { useUser } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
 import { useCallback } from 'react';
 
-export default function AppWelcome() {
+type AppWelcomeProps = {
+  title?: string;
+  description?: string;
+  img?: string; // Optional custom background image
+  showCreateQuizButton?: boolean;
+  createQuizAction?: () => void; // Optional custom action for create quiz
+};
+
+export default function AppWelcome({
+  title,
+  description,
+  img = '/assets/images/background-4.jpg',
+  showCreateQuizButton = false,
+  createQuizAction,
+}: AppWelcomeProps) {
   const { user } = useUser();
   const router = useRouter();
 
-  // ✅ useCallback ensures stable reference
-  const handleCreateQuiz = useCallback(() => {
+  const defaultCreateQuiz = useCallback(() => {
     router.push('/create-quiz');
   }, [router]);
 
@@ -25,12 +38,13 @@ export default function AppWelcome() {
         boxShadow: 6,
         minHeight: 200,
         width: '100%',
-        maxWidth: 700,
         ml: 0,
-        cursor: 'default', // Prevents click propagation from card
+        cursor: 'default',
+        backgroundColor: 'grey.900',
+        color: 'white',
       }}
     >
-      {/* Background Image - with pointerEvents none to prevent interference */}
+      {/* Background Image */}
       <Box
         sx={{
           position: 'absolute',
@@ -38,13 +52,13 @@ export default function AppWelcome() {
           left: 0,
           width: '100%',
           height: '100%',
-          backgroundImage: 'url("/assets/images/background-4.jpg")',
+          backgroundImage: `url("${img}")`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
           backgroundRepeat: 'no-repeat',
-          opacity: 0.95,
+          opacity: 0.9,
           zIndex: 0,
-          pointerEvents: 'none', // ✅ Prevents accidental overlay click blocking
+          pointerEvents: 'none',
         }}
       />
 
@@ -54,7 +68,6 @@ export default function AppWelcome() {
         sx={{
           position: 'relative',
           zIndex: 2,
-          color: 'white',
           textShadow: '0 1px 3px rgba(0,0,0,0.7)',
         }}
       >
@@ -63,31 +76,34 @@ export default function AppWelcome() {
           fontWeight="bold"
           sx={{ fontSize: { xs: '1.5rem', sm: '1.75rem' } }}
         >
-          Welcome back, {user?.firstName || 'User'} 👋
+          {title || `Welcome back, ${user?.firstName || 'User'} 👋`}
         </Typography>
 
         <Typography variant="body2" sx={{ maxWidth: 600 }}>
-          Create, manage, and analyze assessments seamlessly with your personal dashboard.
+          {description ||
+            'Create, manage, and analyze assessments seamlessly with your personal dashboard.'}
         </Typography>
 
-        <Button
-          type="button"
-          variant="contained"
-          color="primary"
-          onClick={handleCreateQuiz}
-          disableElevation
-          sx={{
-            width: 'fit-content',
-            px: 3,
-            py: 1,
-            mt: 1,
-            fontWeight: 'bold',
-            borderRadius: 2,
-            zIndex: 2,
-          }}
-        >
-          Create Quiz
-        </Button>
+        {showCreateQuizButton && (
+          <Button
+            type="button"
+            variant="contained"
+            color="primary"
+            onClick={createQuizAction || defaultCreateQuiz}
+            disableElevation
+            sx={{
+              width: 'fit-content',
+              px: 3,
+              py: 1,
+              mt: 1,
+              fontWeight: 'bold',
+              borderRadius: 2,
+              zIndex: 2,
+            }}
+          >
+            Create Quiz
+          </Button>
+        )}
       </Stack>
     </Card>
   );
