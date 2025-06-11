@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   Box,
   Button,
@@ -10,27 +11,31 @@ import {
   Stack,
   CircularProgress,
 } from '@mui/material';
-import { useClerk } from '@clerk/nextjs';
+import { useClerk, useUser } from '@clerk/nextjs';
 
 import AppWelcome from '@/sections/overview/app-welcome';
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
 import QuizTable from '@/components/dashboard/QuizTable';
 import QuizAnalytics from '@/components/dashboard/QuizAnalytics';
 import ThemeToggleButton from '@/components/ThemeToggleButton';
+import DevRoleSwitcher from '@/components/DevRoleSwitcher';
 import { supabase } from '@/utils/supabaseClient';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { signOut } = useClerk();
+  const { user } = useUser();
 
   const [activeTests, setActiveTests] = useState(0);
   const [upcomingTests, setUpcomingTests] = useState(0);
   const [pastTests, setPastTests] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false); // 🧩 Fix hydration flicker
+  const [mounted, setMounted] = useState(false);
+
+  const role = user?.publicMetadata?.role;
 
   useEffect(() => {
-    setMounted(true); // ✅ Prevent theme flicker
+    setMounted(true);
 
     const fetchQuizStats = async () => {
       setLoading(true);
@@ -65,19 +70,61 @@ export default function DashboardPage() {
     fetchQuizStats();
   }, []);
 
-  if (!mounted) return null; // ✅ Block render until theme is ready
+  const handleCreateQuiz = () => {
+    console.log('Navigating to /create-quiz'); // ✅ Debug log
+    router.push('/create-quiz');
+  };
+
+  if (!mounted) return null;
 
   return (
     <Container maxWidth="xl">
+      {/* Header Row: Welcome + Controls */}
       <Stack
         direction="row"
         justifyContent="space-between"
-        alignItems="center"
-        sx={{ mb: 3 }}
+        alignItems="flex-start"
+        spacing={2}
+        sx={{ mb: 4 }}
       >
-        <AppWelcome />
+        <Stack spacing={2}>
+          <AppWelcome
+            title={`Welcome, ${user?.firstName || 'User'}!`}
+            description="Create, monitor, and analyze assessments from your dashboard."
+          />
+
+          {/* Show only if teacher */}
+          {role === 'teacher' && (
+            <>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleCreateQuiz}
+                disableElevation
+                sx={{
+                  width: 'fit-content',
+                  px: 3,
+                  py: 1,
+                  fontWeight: 'bold',
+                  borderRadius: 2,
+                  zIndex: 2,
+                }}
+              >
+                Create Quiz
+              </Button>
+
+              {/* Optional fallback link in case button doesn't work */}
+              {/* <Link href="/create-quiz">
+                <Button variant="outlined" sx={{ mt: 1 }}>
+                  Fallback Link to Create Quiz
+                </Button>
+              </Link> */}
+            </>
+          )}
+        </Stack>
 
         <Stack direction="row" spacing={2}>
+          <DevRoleSwitcher />
           <ThemeToggleButton />
           <Button variant="outlined" color="error" onClick={() => signOut()}>
             Sign Out

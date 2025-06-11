@@ -9,6 +9,7 @@ import {
   Stack,
   Typography,
   CircularProgress,
+  TextField,
 } from '@mui/material';
 import { useUser, useClerk } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
@@ -16,6 +17,7 @@ import { supabase } from '@/utils/supabaseClient';
 import AppWelcome from '@/sections/overview/app-welcome';
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
 import ThemeToggleButton from '@/components/ThemeToggleButton';
+import DevRoleSwitcher from '@/components/DevRoleSwitcher';
 
 export default function StudentDashboardPage() {
   const { user } = useUser();
@@ -27,13 +29,18 @@ export default function StudentDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
 
+  const [accessCode, setAccessCode] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [codeLoading, setCodeLoading] = useState(false);
+
+  const role = user?.publicMetadata?.role;
+
   useEffect(() => {
     setMounted(true);
     const fetchQuizzes = async () => {
       setLoading(true);
       try {
         const now = new Date();
-
         const { data, error } = await supabase
           .from('quizzes')
           .select('*')
@@ -55,22 +62,60 @@ export default function StudentDashboardPage() {
     fetchQuizzes();
   }, []);
 
-  const handleAttemptQuiz = (quizId: string) => {
-    router.push(`/take-quiz/${quizId}`);
+  const handleAccessCodeSubmit = async () => {
+    setCodeError('');
+    if (!accessCode.trim()) {
+      setCodeError('Please enter a code.');
+      return;
+    }
+
+    setCodeLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('quizzes')
+        .select('*')
+        .eq('access_code', accessCode.trim())
+        .eq('is_draft', false)
+        .limit(1)
+        .single();
+
+      if (error || !data) {
+        setCodeError('Invalid or expired code.');
+        return;
+      }
+
+      const now = new Date();
+      const start = new Date(data.start_time);
+      const end = new Date(data.end_time);
+
+      if (now < start) {
+        setCodeError('Quiz has not started yet.');
+      } else if (now > end) {
+        setCodeError('This quiz has already ended.');
+      } else {
+        router.push(`/attempt-quiz/${data.id}`);
+      }
+    } catch (err) {
+      setCodeError('Something went wrong. Try again.');
+    } finally {
+      setCodeLoading(false);
+    }
   };
 
   if (!mounted) return null;
 
   return (
     <Container maxWidth="xl">
-      {/* Top Section */}
+      {/* Header */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-        <AppWelcome
-          title={`Welcome, ${user?.firstName}!`}
-          description="Your available assessments are listed below. Good luck!"
-          showCreateQuizButton={false}
-        />
-        <Stack direction="row" spacing={2}>
+ <AppWelcome
+  title={`Welcome, ${user?.firstName || 'Student'}!`}
+  description="Your available assessments are listed below. Good luck!"
+  role={role as 'teacher' | 'student' | 'admin'} // ✅ Pass correct prop
+/>
+
+        <Stack direction="row" spacing={2} alignItems="center">
+          <DevRoleSwitcher />
           <ThemeToggleButton />
           <Button variant="outlined" color="error" onClick={() => signOut()}>
             Sign Out
@@ -78,7 +123,7 @@ export default function StudentDashboardPage() {
         </Stack>
       </Stack>
 
-      {/* Summary Widget */}
+      {/* Summary */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={4}>
           <AppWidgetSummary
@@ -89,6 +134,44 @@ export default function StudentDashboardPage() {
           />
         </Grid>
       </Grid>
+
+      {/* Access Code Input */}
+      <Box
+        sx={{
+          mb: 4,
+          p: 3,
+          borderRadius: 3,
+          bgcolor: 'background.paper',
+          boxShadow: 3,
+          border: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
+        <Typography variant="h6" gutterBottom>
+          Join a Quiz Using Access Code
+        </Typography>
+
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+          <TextField
+            label="Enter Access Code"
+            variant="outlined"
+            value={accessCode}
+            onChange={(e) => setAccessCode(e.target.value)}
+            error={!!codeError}
+            helperText={codeError}
+            fullWidth
+          />
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleAccessCodeSubmit}
+            disabled={codeLoading}
+            sx={{ minWidth: 160, height: '100%' }}
+          >
+            {codeLoading ? 'Checking...' : 'Start Test'}
+          </Button>
+        </Stack>
+      </Box>
 
       {/* Quiz Cards */}
       <Box mt={4}>
@@ -131,9 +214,9 @@ export default function StudentDashboardPage() {
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'space-between',
-                      bgcolor: 'rgba(255, 255, 255, 0.05)',
-                      backdropFilter: 'blur(12px)',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      bgcolor: 'background.default',
+                      border: '1px solid',
+                      borderColor: 'divider',
                       boxShadow: 3,
                       transition: 'transform 0.3s ease, box-shadow 0.3s ease',
                       '&:hover': {
@@ -143,7 +226,7 @@ export default function StudentDashboardPage() {
                     }}
                   >
                     <Stack spacing={1}>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
                         {quiz.title}
                       </Typography>
 
@@ -164,7 +247,7 @@ export default function StudentDashboardPage() {
                           {status}
                         </Box>
                         <Typography variant="caption" color="text.secondary">
-                          Ends: {quiz.end_time ? new Date(quiz.end_time).toLocaleTimeString() : 'N/A'}
+                          Ends: {new Date(quiz.end_time).toLocaleTimeString()}
                         </Typography>
                       </Stack>
 
@@ -185,7 +268,7 @@ export default function StudentDashboardPage() {
                       variant="contained"
                       color="primary"
                       sx={{ mt: 3, borderRadius: 2, fontWeight: 600 }}
-                      onClick={() => handleAttemptQuiz(quiz.id)}
+                      onClick={() => router.push(`/attempt-quiz/${quiz.id}`)}
                       disabled={status !== 'Live'}
                     >
                       🚀 Attempt Quiz
@@ -197,27 +280,6 @@ export default function StudentDashboardPage() {
           </Grid>
         )}
       </Box>
-
-      {/* Optional: Floating Help Button */}
-      {/* 
-      <Box sx={{ position: 'fixed', bottom: 24, right: 24, zIndex: 999 }}>
-        <Button
-          variant="contained"
-          color="secondary"
-          sx={{
-            borderRadius: '50%',
-            minWidth: 56,
-            height: 56,
-            boxShadow: 4,
-            fontSize: 24,
-            fontWeight: 'bold',
-          }}
-          onClick={() => router.push('/support')}
-        >
-          ?
-        </Button>
-      </Box>
-      */}
     </Container>
   );
 }

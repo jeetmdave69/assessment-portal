@@ -1,41 +1,46 @@
 'use client';
 
 import {
+  Alert,
   Box,
   Button,
+  Checkbox,
+  CircularProgress,
   Container,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Snackbar,
-  Alert,
-  Typography,
-  Stack,
-  Paper,
   Divider,
+  FormControlLabel,
   IconButton,
+  Paper,
+  Snackbar,
+  Stack,
+  TextField,
   Tooltip,
+  Typography,
 } from '@mui/material';
-import { useForm, FormProvider } from 'react-hook-form';
+import { useForm, FormProvider, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useUser } from '@clerk/nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
 import { useEffect, useState } from 'react';
 import { quizSchema, QuizFormValues } from '@/schemas/quizSchema';
-import QuizDetailsForm from '@/components/quiz/QuizDetailsForm';
-import QuestionList from '@/components/quiz/QuestionList';
-import dayjs from 'dayjs';
-import { LocalizationProvider } from '@mui/x-date-pickers';
+import { LocalizationProvider, DateTimePicker } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { useThemeMode } from '@/theme/ThemeModeProvider';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+import dayjs from 'dayjs';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-export const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export default function CreateQuizPage() {
   const { mode, toggleMode } = useThemeMode();
@@ -45,6 +50,7 @@ export default function CreateQuizPage() {
   const [openDialog, setOpenDialog] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const methods = useForm<QuizFormValues>({
     resolver: zodResolver(quizSchema),
@@ -52,8 +58,8 @@ export default function CreateQuizPage() {
       quizTitle: '',
       totalMarks: '0',
       duration: '0',
-      startDateTime: new Date(),
-      expiryDateTime: new Date(),
+      startDateTime: dayjs().toDate(),
+      expiryDateTime: dayjs().add(1, 'day').toDate(),
       shuffleQuestions: false,
       shuffleOptions: false,
       maxAttempts: '1',
@@ -66,34 +72,40 @@ export default function CreateQuizPage() {
           options: [
             { text: '', image: null, isCorrect: false },
             { text: '', image: null, isCorrect: false },
-            { text: '', image: null, isCorrect: false },
-            { text: '', image: null, isCorrect: false },
           ],
         },
       ],
     },
   });
 
-  useEffect(() => {
-    setMounted(true);
-    methods.reset({
-      ...methods.getValues(),
-      startDateTime: dayjs().toDate(),
-      expiryDateTime: dayjs().add(1, 'day').toDate(),
-    });
-  }, []);
+  const {
+    control,
+    register,
+    handleSubmit,
+    setValue,
+    watch,
+    reset,
+  } = methods;
 
-  const handleSubmit = async (data: QuizFormValues, isDraft: boolean) => {
+  const { fields: questionFields, append, remove } = useFieldArray({
+    control,
+    name: 'questions',
+  });
+
+  useEffect(() => setMounted(true), []);
+
+  const onSubmit = async (data: QuizFormValues, isDraft: boolean) => {
     if (!isLoaded || !isSignedIn || !user?.id) {
-      alert('User not loaded or not signed in. Please sign in first.');
+      alert('Please sign in before creating a quiz.');
       return;
     }
+
+    setIsSubmitting(true);
 
     try {
       const generatedCode = uuidv4().split('-')[0];
 
       const payload = {
-        user_id: user.id,
         quiz_name: data.quizTitle,
         total_marks: parseInt(data.totalMarks),
         duration: parseInt(data.duration),
@@ -103,25 +115,50 @@ export default function CreateQuizPage() {
         shuffle_options: data.shuffleOptions,
         max_attempts: parseInt(data.maxAttempts),
         preview_mode: data.previewMode,
-        questions: data.questions,
         access_code: generatedCode,
         is_draft: isDraft,
         score: 0,
+        user_id: user.id,
         creator_id: user.id,
       };
 
-      const { error } = await supabase.from('quizzes').insert([payload]);
-      if (error) throw error;
+      const { data: insertedQuiz, error: quizError } = await supabase
+        .from('quizzes')
+        .insert([payload])
+        .select('id')
+        .single();
 
-      if (!isDraft) {
+      if (quizError) throw quizError;
+
+      const quizId = insertedQuiz.id;
+
+      const questionsPayload = data.questions.map((q) => ({
+        quiz_id: quizId,
+        question_text: q.question,
+        explanation: q.explanation,
+        options: q.options,
+        correct_answers: q.options.filter(opt => opt.isCorrect).map(opt => opt.text),
+      }));
+
+      const { error: questionsError } = await supabase
+        .from('questions')
+        .insert(questionsPayload);
+
+      if (questionsError) throw questionsError;
+
+      reset();
+
+      if (isDraft) {
+        setShowToast(true);
+      } else {
         setAccessCode(generatedCode);
         setOpenDialog(true);
-      } else {
-        setShowToast(true);
       }
     } catch (err) {
-      alert('Failed to save quiz.');
-      console.error(err);
+      console.error('Quiz save error:', err);
+      alert('Failed to save quiz. Check console for more details.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -131,13 +168,10 @@ export default function CreateQuizPage() {
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Container maxWidth="md" sx={{ py: 5 }}>
         <Paper elevation={3} sx={{ p: 4 }}>
-          {/* Header with Dark Mode Toggle */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
-            <Typography variant="h4" fontWeight={700}>
-              Create New Quiz
-            </Typography>
+            <Typography variant="h4" fontWeight={700}>Create New Quiz</Typography>
             <Tooltip title="Toggle Dark Mode">
-              <IconButton onClick={toggleMode} color="inherit">
+              <IconButton onClick={toggleMode}>
                 {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
               </IconButton>
             </Tooltip>
@@ -146,19 +180,113 @@ export default function CreateQuizPage() {
           <Divider sx={{ mb: 3 }} />
 
           <FormProvider {...methods}>
-            <form onSubmit={methods.handleSubmit((data) => handleSubmit(data, false))}>
-              <QuizDetailsForm />
-              <QuestionList />
+            <form onSubmit={handleSubmit((data) => onSubmit(data, false))}>
+              <Stack spacing={3}>
+                <TextField label="Quiz Title" {...register('quizTitle')} fullWidth required />
+                <Stack direction="row" spacing={2}>
+                  <TextField label="Total Marks" type="number" {...register('totalMarks')} fullWidth required />
+                  <TextField label="Duration (mins)" type="number" {...register('duration')} fullWidth required />
+                </Stack>
+                <Stack direction="row" spacing={2}>
+                  <DateTimePicker
+                    label="Start Date & Time"
+                    value={dayjs(watch('startDateTime'))}
+                    onChange={(val) => setValue('startDateTime', val?.toDate() || new Date())}
+                    slotProps={{ textField: { fullWidth: true } }}
+                  />
+                  <DateTimePicker
+                    label="End Date & Time"
+                    value={dayjs(watch('expiryDateTime'))}
+                    onChange={(val) => setValue('expiryDateTime', val?.toDate() || new Date())}
+                    slotProps={{ textField: { fullWidth: true } }}
+                  />
+                </Stack>
+                <TextField label="Max Attempts" type="number" {...register('maxAttempts')} fullWidth required />
+                <FormControlLabel control={<Checkbox {...register('previewMode')} />} label="Enable Preview Mode" />
+                <Stack direction="row" spacing={2}>
+                  <FormControlLabel control={<Checkbox {...register('shuffleQuestions')} />} label="Shuffle Questions" />
+                  <FormControlLabel control={<Checkbox {...register('shuffleOptions')} />} label="Shuffle Options" />
+                </Stack>
+              </Stack>
+
+              <Typography variant="h6" mt={4} mb={2}>Questions</Typography>
+
+              {questionFields.map((q, qIndex) => {
+                const options = watch(`questions.${qIndex}.options`);
+                return (
+                  <Box key={q.id} mb={3} p={2} border={1} borderColor="grey.300" borderRadius={2}>
+                    <Stack spacing={2}>
+                      <TextField label="Question" {...register(`questions.${qIndex}.question`)} fullWidth required />
+                      {options.map((_, optIndex) => (
+                        <Stack key={optIndex} direction="row" spacing={2} alignItems="center">
+                          <TextField
+                            label={`Option ${optIndex + 1}`}
+                            {...register(`questions.${qIndex}.options.${optIndex}.text`)}
+                            fullWidth
+                          />
+                          <FormControlLabel
+                            control={<Checkbox {...register(`questions.${qIndex}.options.${optIndex}.isCorrect`)} />}
+                            label="Correct"
+                          />
+                        </Stack>
+                      ))}
+                      <Button
+                        onClick={() =>
+                          setValue(`questions.${qIndex}.options`, [
+                            ...options,
+                            { text: '', image: null, isCorrect: false },
+                          ])
+                        }
+                        startIcon={<AddIcon />}
+                      >
+                        Add Option
+                      </Button>
+                      <TextField
+                        label="Explanation"
+                        {...register(`questions.${qIndex}.explanation`)}
+                        fullWidth
+                        multiline
+                      />
+                      <Button
+                        startIcon={<DeleteIcon />}
+                        onClick={() => remove(qIndex)}
+                        color="error"
+                      >
+                        Remove Question
+                      </Button>
+                    </Stack>
+                  </Box>
+                );
+              })}
+
+              <Button
+                startIcon={<AddIcon />}
+                onClick={() =>
+                  append({
+                    question: '',
+                    image: null,
+                    explanation: '',
+                    options: [
+                      { text: '', image: null, isCorrect: false },
+                      { text: '', image: null, isCorrect: false },
+                    ],
+                  })
+                }
+                sx={{ mt: 2 }}
+              >
+                Add Question
+              </Button>
 
               <Stack direction="row" spacing={2} mt={4} justifyContent="flex-end">
                 <Button
                   variant="outlined"
-                  onClick={methods.handleSubmit((data) => handleSubmit(data, true))}
+                  onClick={handleSubmit((data) => onSubmit(data, true))}
+                  disabled={isSubmitting}
                 >
-                  Save as Draft
+                  {isSubmitting ? <CircularProgress size={24} /> : 'Save as Draft'}
                 </Button>
-                <Button type="submit" variant="contained">
-                  Publish Quiz
+                <Button type="submit" variant="contained" disabled={isSubmitting}>
+                  {isSubmitting ? <CircularProgress size={24} /> : 'Publish Quiz'}
                 </Button>
               </Stack>
             </form>
@@ -168,14 +296,8 @@ export default function CreateQuizPage() {
         <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>
           <DialogTitle>Quiz Created Successfully!</DialogTitle>
           <DialogContent>
-            <Typography variant="body1">
-              Share this access code with your students:
-            </Typography>
-            <Typography
-              variant="h5"
-              color="primary"
-              sx={{ mt: 2, fontWeight: 'bold' }}
-            >
+            <Typography>Share this access code with your students:</Typography>
+            <Typography variant="h5" sx={{ mt: 2 }} color="primary" fontWeight="bold">
               {accessCode}
             </Typography>
           </DialogContent>
@@ -184,11 +306,7 @@ export default function CreateQuizPage() {
           </DialogActions>
         </Dialog>
 
-        <Snackbar
-          open={showToast}
-          autoHideDuration={3000}
-          onClose={() => setShowToast(false)}
-        >
+        <Snackbar open={showToast} autoHideDuration={3000} onClose={() => setShowToast(false)}>
           <Alert onClose={() => setShowToast(false)} severity="success" sx={{ width: '100%' }}>
             Quiz saved as draft!
           </Alert>

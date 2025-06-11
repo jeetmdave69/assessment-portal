@@ -17,7 +17,8 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/utils/supabaseClient';
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
 import ThemeToggleButton from '@/components/ThemeToggleButton';
-import AppWelcome from '@/sections/overview/app-welcome'; // ✅ Import the welcome card
+import AppWelcome from '@/sections/overview/app-welcome';
+import DevRoleSwitcher from '@/components/DevRoleSwitcher'; // ✅ Import
 
 export default function AdminDashboardPage() {
   const { user } = useUser();
@@ -73,18 +74,19 @@ export default function AdminDashboardPage() {
 
   return (
     <Container maxWidth="xl">
-      {/* ✅ Welcome Card */}
+      {/* ✅ Welcome Banner */}
       <AppWelcome
         title={`Welcome back, ${user?.firstName || 'Admin'}!`}
         description="Manage quizzes, users, and platform activity from this dashboard."
-        showCreateQuizButton={true}
+        showCreateQuizButton
         createQuizAction={() => router.push('/create-quiz')}
       />
 
-      {/* Header Controls */}
+      {/* ✅ Header Controls */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
         <Typography variant="h4">Admin Dashboard</Typography>
         <Stack direction="row" spacing={2}>
+          <DevRoleSwitcher /> {/* ✅ Dev Role Switcher added here */}
           <ThemeToggleButton />
           <Button variant="outlined" color="error" onClick={() => signOut()}>
             Sign Out
@@ -92,7 +94,7 @@ export default function AdminDashboardPage() {
         </Stack>
       </Stack>
 
-      {/* Summary Cards */}
+      {/* ✅ Summary Widgets */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={3}>
           <AppWidgetSummary title="Total Quizzes" total={quizCount} icon="mdi:clipboard-text" color="primary" />
@@ -108,7 +110,7 @@ export default function AdminDashboardPage() {
         </Grid>
       </Grid>
 
-      {/* Recent Quizzes List */}
+      {/* ✅ Recent Quizzes Section */}
       <Typography variant="h6" sx={{ mb: 2 }}>
         Recent Quizzes
       </Typography>

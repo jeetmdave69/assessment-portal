@@ -8,24 +8,24 @@ import { useCallback } from 'react';
 type AppWelcomeProps = {
   title?: string;
   description?: string;
-  img?: string; // Optional custom background image
-  showCreateQuizButton?: boolean;
-  createQuizAction?: () => void; // Optional custom action for create quiz
+  img?: string;
+  role?: 'teacher' | 'student' | 'admin'; // ✅ Add role prop
 };
 
 export default function AppWelcome({
   title,
   description,
   img = '/assets/images/background-4.jpg',
-  showCreateQuizButton = false,
-  createQuizAction,
+  role = 'student', // ✅ Default to 'student'
 }: AppWelcomeProps) {
   const { user } = useUser();
   const router = useRouter();
 
-  const defaultCreateQuiz = useCallback(() => {
+  const handleCreateQuiz = useCallback(() => {
     router.push('/create-quiz');
   }, [router]);
+
+  const showCreateQuizButton = role === 'teacher'; // ✅ Only for teacher
 
   return (
     <Card
@@ -38,8 +38,6 @@ export default function AppWelcome({
         boxShadow: 6,
         minHeight: 200,
         width: '100%',
-        ml: 0,
-        cursor: 'default',
         backgroundColor: 'grey.900',
         color: 'white',
       }}
@@ -86,10 +84,9 @@ export default function AppWelcome({
 
         {showCreateQuizButton && (
           <Button
-            type="button"
             variant="contained"
             color="primary"
-            onClick={createQuizAction || defaultCreateQuiz}
+            onClick={handleCreateQuiz}
             disableElevation
             sx={{
               width: 'fit-content',
