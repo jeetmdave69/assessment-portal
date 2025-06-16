@@ -1,175 +1,76 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import {
-  Box,
-  Button,
-  Container,
-  Grid,
-  Stack,
-  Typography,
-  Paper,
-  Chip,
-  CircularProgress,
-} from '@mui/material';
-import { useUser, useClerk } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
+import { Box, Grid, Typography } from '@mui/material';
+import { useUser } from '@clerk/nextjs';
 import { supabase } from '@/utils/supabaseClient';
+
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
-import ThemeToggleButton from '@/components/ThemeToggleButton';
 import AppWelcome from '@/sections/overview/app-welcome';
+import { ThemeToggleButton } from '@/components/ThemeToggleButton';
 import DevRoleSwitcher from '@/components/DevRoleSwitcher';
+
+interface QuizData {
+  id: string;
+  status: string;
+}
 
 export default function AdminDashboardPage() {
   const { user } = useUser();
-  const { signOut } = useClerk();
   const router = useRouter();
 
-  const [quizCount, setQuizCount] = useState(0);
-  const [draftCount, setDraftCount] = useState(0);
-  const [userCount, setUserCount] = useState(0);
-  const [teacherCount, setTeacherCount] = useState(0);
-  const [studentCount, setStudentCount] = useState(0);
-  const [recentQuizzes, setRecentQuizzes] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false);
+  const [quizData, setQuizData] = useState<QuizData[]>([]);
 
   useEffect(() => {
-    setMounted(true);
-
-    const fetchDashboardData = async () => {
-      setLoading(true);
-      try {
-        const [
-          { count: quizCount },
-          { count: draftCount },
-          { count: userCount },
-          teachers,
-          students,
-          quizzes
-        ] = await Promise.all([
-          supabase.from('quizzes').select('*', { count: 'exact', head: true }),
-          supabase.from('quizzes').select('*', { count: 'exact', head: true }).eq('is_draft', true),
-          supabase.from('users').select('*', { count: 'exact', head: true }),
-          supabase.from('users').select('*').eq('role', 'teacher'),
-          supabase.from('users').select('*').eq('role', 'student'),
-          supabase.from('quizzes').select('*').order('created_at', { ascending: false }).limit(5),
-        ]);
-
-        setQuizCount(quizCount || 0);
-        setDraftCount(draftCount || 0);
-        setUserCount(userCount || 0);
-        setTeacherCount(teachers.data?.length || 0);
-        setStudentCount(students.data?.length || 0);
-        setRecentQuizzes(quizzes.data || []);
-      } catch (err) {
-        console.error('Error fetching admin dashboard data:', err);
-      } finally {
-        setLoading(false);
+    const fetchQuizData = async () => {
+      const { data, error } = await supabase.from('quizzes').select('id, status');
+      if (error) {
+        console.error('Error fetching quiz data:', error.message);
+      } else {
+        setQuizData(data || []);
       }
     };
 
-    fetchDashboardData();
+    fetchQuizData();
   }, []);
 
-  const getStatusBadge = (quiz: any) => {
-    const now = new Date();
-    if (new Date(quiz.start_time) > now) return <Chip label="Upcoming" color="warning" size="small" />;
-    if (new Date(quiz.end_time) < now) return <Chip label="Closed" color="error" size="small" />;
-    return <Chip label="Live" color="success" size="small" />;
-  };
-
-  if (!mounted) return null;
+  const publishedCount = quizData.filter(q => q.status === 'published').length;
+  const draftCount = quizData.filter(q => q.status === 'draft').length;
 
   return (
-    <Container maxWidth="xl">
-      <AppWelcome
-        title={`Welcome back, ${user?.firstName || 'Admin'}!`}
-        description="Manage quizzes, users, and platform activity from this dashboard."
-        showCreateQuizButton
-        createQuizAction={() => router.push('/create-quiz')}
-      />
-
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-        <Typography variant="h4">Admin Dashboard</Typography>
-        <Stack direction="row" spacing={2}>
-          <DevRoleSwitcher />
+    <Box p={3}>
+      <Box mb={3} display="flex" justifyContent="space-between" alignItems="center">
+        <AppWelcome
+          title={`Welcome back, ${user?.firstName || 'Admin'}!`}
+          description="Manage quizzes, users, and platform activity from this dashboard."
+          showCreateQuizButton
+          createQuizAction={() => router.push('/create-quiz')}
+        />
+        <Box display="flex" gap={2}>
           <ThemeToggleButton />
-          <Button variant="outlined" color="error" onClick={() => signOut()}>
-            Sign Out
-          </Button>
-        </Stack>
-      </Stack>
-
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <AppWidgetSummary title="Total Quizzes" total={quizCount} icon="mdi:clipboard-text" color="primary" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <AppWidgetSummary title="Draft Quizzes" total={draftCount} icon="mdi:file-document-edit-outline" color="secondary" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <AppWidgetSummary title="Total Users" total={userCount} icon="mdi:account-multiple" color="info" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <AppWidgetSummary title="Teachers" total={teacherCount} icon="mdi:account-tie" color="success" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <AppWidgetSummary title="Students" total={studentCount} icon="mdi:school" color="warning" />
-        </Grid>
-      </Grid>
-
-      <Box sx={{ mb: 5 }}>
-        <Button variant="contained" color="secondary" onClick={() => router.push('/admin/users')}>
-          Manage Users
-        </Button>
+          <DevRoleSwitcher />
+        </Box>
       </Box>
 
-      <Typography variant="h6" sx={{ mb: 2 }}>
-        Recent Quizzes
-      </Typography>
-
-      {loading ? (
-        <Box display="flex" justifyContent="center" py={6}>
-          <CircularProgress />
-        </Box>
-      ) : (
-        <Stack spacing={2}>
-          {recentQuizzes.map((quiz) => (
-            <Paper key={quiz.id} elevation={2} sx={{ p: 2, borderRadius: 2 }}>
-              <Stack
-                direction={{ xs: 'column', sm: 'row' }}
-                justifyContent="space-between"
-                alignItems={{ xs: 'flex-start', sm: 'center' }}
-                spacing={1}
-              >
-                <Typography variant="subtitle1" fontWeight={600}>
-                  {quiz.title}
-                </Typography>
-                {getStatusBadge(quiz)}
-              </Stack>
-            </Paper>
-          ))}
-        </Stack>
-      )}
-
-      <Typography variant="h6" sx={{ mt: 6 }}>
-        Quiz Management Table (Coming Soon)
-      </Typography>
-      <Paper sx={{ p: 3, mt: 2, borderRadius: 2, textAlign: 'center' }}>
-        <Typography variant="body2" color="text.secondary">
-          Soon you’ll be able to view, edit, and delete quizzes in a table format here.
-        </Typography>
-      </Paper>
-
-      <Typography variant="h6" sx={{ mt: 6 }}>
-        Audit Logs
-      </Typography>
-      <Paper sx={{ p: 2, mt: 1, borderRadius: 2 }}>
-        <Typography variant="body2" color="text.secondary">
-          Audit logging of quiz creation, updates, and deletions will appear here.
-        </Typography>
-      </Paper>
-    </Container>
+      <Grid container spacing={3}>
+        <Grid item xs={12} sm={6} md={4}>
+          <AppWidgetSummary
+            title="Published Quizzes"
+            total={publishedCount}
+            icon="mdi:file-document-check-outline"
+            color="success"
+          />
+        </Grid>
+        <Grid item xs={12} sm={6} md={4}>
+          <AppWidgetSummary
+            title="Draft Quizzes"
+            total={draftCount}
+            icon="mdi:file-document-edit-outline"
+            color="warning"
+          />
+        </Grid>
+      </Grid>
+    </Box>
   );
 }
