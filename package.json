@@ -19,6 +19,7 @@
     "@mui/material": "^5.17.1",
     "@mui/styled-engine-sc": "^7.1.1",
     "@mui/system": "^5.17.1",
+    "@mui/x-date-pickers": "^8.5.2",
     "@supabase/supabase-js": "^2.49.10",
     "@tsparticles/basic": "^3.0.2",
     "@tsparticles/engine": "^3.8.1",
@@ -39,6 +40,7 @@
     "recharts": "^2.15.3",
     "styled-components": "^6.1.19",
     "tsparticles": "^3.8.1",
+    "uuid": "^11.1.0",
     "zod": "^3.25.56"
   },
   "devDependencies": {
