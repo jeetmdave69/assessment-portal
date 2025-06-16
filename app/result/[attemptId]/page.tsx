@@ -4,257 +4,259 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   Box,
-  Typography,
+  Button,
   Card,
   CardContent,
   CircularProgress,
+  Container,
+  Typography,
   Chip,
   Stack,
   Divider,
+  Paper,
+  Alert,
 } from '@mui/material';
 import { supabase } from '@/utils/supabaseClient';
+import { motion } from 'framer-motion';
+import { Check, X } from 'lucide-react';
 
-interface Attempt {
-  id: number;
-  quiz_id: number;
-  answers: Record<string, string>;
-  correct_answers: Record<string, string[]>;
-  submitted_at: string;
-}
-
-interface Question {
-  id: number;
-  question_text: string;
-  options: {
-    text: string;
-    image?: string;
-    isCorrect?: boolean;
-  }[];
-  image_url?: string;
-  explanation?: string;
-}
+const PASS_THRESHOLD = 60;
 
 export default function ResultPage() {
-  const params = useParams() as { attemptId: string };
-  const attemptId = params.attemptId;
+  const params = useParams();
   const router = useRouter();
 
-  const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const attemptId = Number(Array.isArray(params?.attemptId) ? params.attemptId[0] : params?.attemptId);
+  const [attempt, setAttempt] = useState<any>(null);
+  const [questions, setQuestions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [score, setScore] = useState<number>(0);
+  const [quizTitle, setQuizTitle] = useState('');
+  const [showBackWarning, setShowBackWarning] = useState(false);
 
   useEffect(() => {
-    if (!attemptId) return;
-
     const fetchData = async () => {
-      setLoading(true);
+      if (!attemptId || isNaN(attemptId)) return;
 
-      const { data: attemptData, error: attemptError } = await supabase
+      const { data: attemptData } = await supabase
         .from('attempts')
         .select('*')
         .eq('id', attemptId)
         .single();
 
-      if (attemptError || !attemptData) {
-        console.error('Failed to fetch attempt:', attemptError?.message);
-        router.push('/dashboard/student');
+      if (!attemptData) {
+        setLoading(false);
         return;
       }
 
-      setAttempt(attemptData);
+      if (!attemptData.completed_at) {
+        const now = new Date().toISOString();
+        await supabase.from('attempts').update({ completed_at: now }).eq('id', attemptId);
+        attemptData.completed_at = now;
+      }
 
-      const { data: questionData, error: questionError } = await supabase
+      const { data: quiz } = await supabase
+        .from('quizzes')
+        .select('*')
+        .eq('id', attemptData.quiz_id)
+        .single();
+
+      const { data: questionData } = await supabase
         .from('questions')
         .select('*')
         .eq('quiz_id', attemptData.quiz_id);
 
-      if (questionError) {
-        console.error('Error fetching questions:', questionError.message);
-        return;
-      }
+      const parsedQuestions = (questionData || []).map((q: any) => {
+        const options = JSON.parse(q.options || '[]');
+        const correct = JSON.parse(q.correct_answers || '[]');
 
-      const parsedQuestions = (questionData || []).map((q: any) => ({
-        ...q,
-        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
-      }));
+        return {
+          id: q.id,
+          question_text: q.question_text,
+          explanation: q.explanation || '',
+          options: options.map((opt: any) => {
+            const text = typeof opt === 'string' ? opt : opt?.text || '';
+            const isCorrect = correct.some(
+              (c: any) =>
+                (typeof c === 'string' ? c.trim() : c?.text?.trim()) === text.trim()
+            );
+            return { text, isCorrect };
+          }),
+        };
+      });
 
+      setQuizTitle(quiz?.quiz_title || 'Untitled Quiz');
+      setAttempt({
+        ...attemptData,
+        answers: JSON.parse(attemptData.answers || '{}'),
+        correct_answers: JSON.parse(attemptData.correct_answers || '{}'),
+      });
       setQuestions(parsedQuestions);
-      calculateScore(attemptData.answers, attemptData.correct_answers);
       setLoading(false);
     };
 
     fetchData();
   }, [attemptId]);
 
-  const calculateScore = (
-    answers: Record<string, string>,
-    correctAnswersMap: Record<string, string[]>
-  ) => {
-    let total = 0;
+  useEffect(() => {
+    window.history.pushState(null, '', window.location.href);
+    const handlePopState = () => {
+      setShowBackWarning(true);
+      window.history.pushState(null, '', window.location.href);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
-    Object.entries(answers).forEach(([questionId, rawUserAnswer]) => {
-      const userAnswer = rawUserAnswer.trim().toLowerCase();
-      const correct = (correctAnswersMap?.[questionId] || []).map((ans) =>
-        ans.trim().toLowerCase()
-      );
-      if (correct.includes(userAnswer)) total += 1;
-    });
-
-    setScore(total);
-  };
+  const normalize = (val: any) =>
+    typeof val === 'string'
+      ? val.trim().toLowerCase()
+      : val?.text?.trim().toLowerCase() || '';
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" py={6}>
+      <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
         <CircularProgress />
       </Box>
     );
   }
 
-  if (!attempt) {
-    return <Typography mt={4}>Attempt not found.</Typography>;
-  }
+  const total = questions.length;
+  const score = attempt?.score ?? 0;
+  const isPassed = total > 0 && (score / total) * 100 >= PASS_THRESHOLD;
 
   return (
-    <Box
-      sx={{
-        p: 4,
-        backgroundColor: '#121212',
-        minHeight: '100vh',
-        color: '#ffffff',
-      }}
-    >
-      <Typography variant="h4" fontWeight="bold" gutterBottom color="#fff">
-        📝 Quiz Result
-      </Typography>
+    <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7 }}>
+      <Box sx={{ minHeight: '100vh', background: '#f4f6f8', py: 4 }}>
+        <Container maxWidth="md">
+          {showBackWarning && (
+            <Alert severity="warning" sx={{ mb: 2, borderRadius: 2 }}>
+              ⚠️ You cannot go back to the quiz page after submission.
+            </Alert>
+          )}
 
-      <Typography variant="subtitle1" gutterBottom color="#ccc">
-        Submitted at: {new Date(attempt.submitted_at).toLocaleString()}
-      </Typography>
+          <Typography variant="h4" fontWeight="bold" gutterBottom>
+            Quiz Result Summary
+          </Typography>
 
-      <Typography variant="h6" mt={2} color="#4caf50">
-        ✅ Score: {score} / {questions.length}
-      </Typography>
+          <Typography variant="h6" gutterBottom>
+            <strong>Quiz:</strong> {quizTitle}
+          </Typography>
+          <Typography variant="h6" gutterBottom>
+            <strong>Candidate:</strong> {attempt?.user_name ?? 'Unknown'}
+          </Typography>
 
-      <Divider sx={{ my: 3, borderColor: '#444' }} />
-
-      {questions.map((q, index) => {
-        const userAnswerRaw = attempt.answers[q.id.toString()];
-        const userAnswer = userAnswerRaw?.trim().toLowerCase() || '';
-
-        const correctNormalized = (attempt.correct_answers?.[q.id.toString()] || []).map(
-          (ans) => ans.trim().toLowerCase()
-        );
-
-        const isCorrect = correctNormalized.includes(userAnswer);
-
-        return (
-          <Card
-            key={q.id}
-            sx={{
-              mb: 3,
-              backgroundColor: '#1e1e1e',
-              borderLeft: `6px solid ${isCorrect ? '#4caf50' : '#f44336'}`,
-              boxShadow: '0 4px 8px rgba(0, 0, 0, 0.4)',
-            }}
+          <Typography variant="h6" gutterBottom>
+            <strong>Score:</strong> {score} / {total}
+          </Typography>
+          <Typography
+            variant="h6"
+            color={isPassed ? '#388e3c' : '#d32f2f'}
+            fontWeight="bold"
+            gutterBottom
           >
-            <CardContent>
-              <Typography
-                variant="subtitle1"
-                fontWeight="bold"
-                gutterBottom
-                color="#fff"
+            <strong>Result:</strong> {isPassed ? 'Pass' : 'Fail'}
+          </Typography>
+
+          <Divider sx={{ my: 3 }} />
+
+          {questions.map((q, idx) => {
+            const userAns = attempt.answers?.[q.id] ?? [];
+            const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
+
+            const correctAns = attempt.correct_answers?.[q.id] ?? [];
+            const correctAnswers = Array.isArray(correctAns)
+              ? correctAns.map(normalize)
+              : [normalize(correctAns)];
+
+            const isCorrect =
+              userAnswers.length === correctAnswers.length &&
+              userAnswers.every((ans) => correctAnswers.includes(ans));
+
+            return (
+              <motion.div
+                key={q.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: idx * 0.07 }}
               >
-                {index + 1}. {q.question_text}
-              </Typography>
-
-              {q.image_url && (
-                <Box
-                  component="img"
-                  src={q.image_url}
-                  alt="question"
+                <Card
                   sx={{
-                    width: '100%',
-                    maxWidth: 300,
+                    my: 2,
+                    backgroundColor: isCorrect ? '#e8f5e9' : '#ffebee',
+                    borderLeft: `6px solid ${isCorrect ? '#388e3c' : '#d32f2f'}`,
                     borderRadius: 2,
-                    mb: 2,
-                    border: '1px solid #444',
                   }}
-                />
-              )}
+                >
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+                      <Typography variant="subtitle1" fontWeight="bold">
+                        Q{idx + 1}. {q.question_text}
+                      </Typography>
+                      <Chip
+                        label={isCorrect ? 'Correct' : 'Incorrect'}
+                        sx={{
+                          backgroundColor: isCorrect ? '#388e3c' : '#d32f2f',
+                          color: '#fff',
+                          fontWeight: 'bold',
+                        }}
+                        icon={isCorrect ? <Check size={18} color="white" /> : <X size={18} color="white" />}
+                      />
+                    </Stack>
 
-              <Stack spacing={1} mb={2}>
-                {q.options.map((opt, i) => {
-                  const optText = opt.text.trim().toLowerCase();
-                  const isUser = optText === userAnswer;
-                  const isRight = correctNormalized.includes(optText);
-
-                  return (
-                    <Box
-                      key={i}
-                      sx={{
-                        p: 2,
-                        borderRadius: 2,
-                        backgroundColor: isRight
-                          ? '#2e7d32'
-                          : isUser
-                          ? '#b71c1c'
-                          : '#333',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 1,
-                        color: '#fff',
-                        border: isUser || isRight ? '1px solid #888' : '1px solid #444',
-                      }}
-                    >
-                      {opt.image && (
-                        <img
-                          src={opt.image}
-                          alt="option"
-                          style={{ width: 28, height: 28, borderRadius: 4 }}
-                        />
-                      )}
-                      <Typography>{opt.text}</Typography>
-
-                      {isUser && (
-                        <Chip
-                          label="Your Answer"
-                          color="info"
-                          size="small"
+                    {q.options.map((opt: any, i: number) => {
+                      const selected = userAnswers.includes(normalize(opt.text));
+                      return (
+                        <Paper
+                          key={i}
                           sx={{
-                            ml: 'auto',
-                            backgroundColor: '#0288d1',
-                            color: '#fff',
+                            p: 1.5,
+                            my: 0.5,
+                            backgroundColor: selected
+                              ? opt.isCorrect
+                                ? '#c8e6c9'
+                                : '#ffcdd2'
+                              : opt.isCorrect
+                              ? '#bbdefb'
+                              : '#fafafa',
+                            border: '1px solid',
+                            borderColor: selected
+                              ? opt.isCorrect
+                                ? '#388e3c'
+                                : '#d32f2f'
+                              : opt.isCorrect
+                              ? '#1976d2'
+                              : '#e0e0e0',
+                            borderRadius: 1,
                           }}
-                        />
-                      )}
-                      {isRight && (
-                        <Chip
-                          label="Correct Answer"
-                          color="success"
-                          size="small"
-                          sx={{
-                            ml: isUser ? 1 : 'auto',
-                            backgroundColor: '#43a047',
-                            color: '#fff',
-                          }}
-                        />
-                      )}
-                    </Box>
-                  );
-                })}
-              </Stack>
+                        >
+                          <Typography>{opt.text}</Typography>
+                        </Paper>
+                      );
+                    })}
 
-              {q.explanation && (
-                <Typography variant="body2" color="#bbb">
-                  💡 Explanation: {q.explanation}
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        );
-      })}
-    </Box>
+                    {q.explanation && (
+                      <Typography variant="body2" mt={1.5} fontStyle="italic" color="text.secondary">
+                        Explanation: {q.explanation}
+                      </Typography>
+                    )}
+                  </CardContent>
+                </Card>
+              </motion.div>
+            );
+          })}
+
+          <Box mt={4} display="flex" justifyContent="center">
+            <Button
+              variant="contained"
+              color="primary"
+              sx={{ px: 4, py: 1.5, borderRadius: 2, fontWeight: 'bold', textTransform: 'none' }}
+              onClick={() => router.push('/')}
+            >
+              Back to Dashboard
+            </Button>
+          </Box>
+        </Container>
+      </Box>
+    </motion.div>
   );
 }

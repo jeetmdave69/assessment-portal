@@ -10,17 +10,21 @@ export default async function DashboardRedirectPage() {
 
   const role = user.publicMetadata?.role;
 
-  if (role === 'student') redirect('/dashboard/student');
-  if (role === 'teacher') redirect('/dashboard/teacher');
-  if (role === 'admin') redirect('/dashboard/admin');
-
-  // If role is missing or invalid
-  return (
-    <div className="h-screen flex items-center justify-center">
-      <div className="text-center space-y-4">
-        <h1 className="text-2xl font-semibold">Access Denied</h1>
-        <p className="text-gray-500">No valid role assigned. Please contact support.</p>
-      </div>
-    </div>
-  );
+  switch (role) {
+    case 'student':
+      redirect('/dashboard/student');
+    case 'teacher':
+      redirect('/dashboard/teacher');
+    case 'admin':
+      redirect('/dashboard/admin');
+    default:
+      return (
+        <div className="h-screen flex items-center justify-center">
+          <div className="text-center space-y-4">
+            <h1 className="text-2xl font-semibold">Access Denied</h1>
+            <p className="text-gray-500">No valid role assigned. Please contact support.</p>
+          </div>
+        </div>
+      );
+  }
 }

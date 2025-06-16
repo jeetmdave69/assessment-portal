@@ -18,7 +18,7 @@ import { supabase } from '@/utils/supabaseClient';
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
 import ThemeToggleButton from '@/components/ThemeToggleButton';
 import AppWelcome from '@/sections/overview/app-welcome';
-import DevRoleSwitcher from '@/components/DevRoleSwitcher'; // ✅ Import
+import DevRoleSwitcher from '@/components/DevRoleSwitcher';
 
 export default function AdminDashboardPage() {
   const { user } = useUser();
@@ -26,6 +26,7 @@ export default function AdminDashboardPage() {
   const router = useRouter();
 
   const [quizCount, setQuizCount] = useState(0);
+  const [draftCount, setDraftCount] = useState(0);
   const [userCount, setUserCount] = useState(0);
   const [teacherCount, setTeacherCount] = useState(0);
   const [studentCount, setStudentCount] = useState(0);
@@ -39,16 +40,24 @@ export default function AdminDashboardPage() {
     const fetchDashboardData = async () => {
       setLoading(true);
       try {
-        const [{ count: quizCount }, { count: userCount }, teachers, students, quizzes] =
-          await Promise.all([
-            supabase.from('quizzes').select('*', { count: 'exact', head: true }),
-            supabase.from('users').select('*', { count: 'exact', head: true }),
-            supabase.from('users').select('*').eq('role', 'teacher'),
-            supabase.from('users').select('*').eq('role', 'student'),
-            supabase.from('quizzes').select('*').order('created_at', { ascending: false }).limit(5),
-          ]);
+        const [
+          { count: quizCount },
+          { count: draftCount },
+          { count: userCount },
+          teachers,
+          students,
+          quizzes
+        ] = await Promise.all([
+          supabase.from('quizzes').select('*', { count: 'exact', head: true }),
+          supabase.from('quizzes').select('*', { count: 'exact', head: true }).eq('is_draft', true),
+          supabase.from('users').select('*', { count: 'exact', head: true }),
+          supabase.from('users').select('*').eq('role', 'teacher'),
+          supabase.from('users').select('*').eq('role', 'student'),
+          supabase.from('quizzes').select('*').order('created_at', { ascending: false }).limit(5),
+        ]);
 
         setQuizCount(quizCount || 0);
+        setDraftCount(draftCount || 0);
         setUserCount(userCount || 0);
         setTeacherCount(teachers.data?.length || 0);
         setStudentCount(students.data?.length || 0);
@@ -74,7 +83,6 @@ export default function AdminDashboardPage() {
 
   return (
     <Container maxWidth="xl">
-      {/* ✅ Welcome Banner */}
       <AppWelcome
         title={`Welcome back, ${user?.firstName || 'Admin'}!`}
         description="Manage quizzes, users, and platform activity from this dashboard."
@@ -82,11 +90,10 @@ export default function AdminDashboardPage() {
         createQuizAction={() => router.push('/create-quiz')}
       />
 
-      {/* ✅ Header Controls */}
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
         <Typography variant="h4">Admin Dashboard</Typography>
         <Stack direction="row" spacing={2}>
-          <DevRoleSwitcher /> {/* ✅ Dev Role Switcher added here */}
+          <DevRoleSwitcher />
           <ThemeToggleButton />
           <Button variant="outlined" color="error" onClick={() => signOut()}>
             Sign Out
@@ -94,10 +101,12 @@ export default function AdminDashboardPage() {
         </Stack>
       </Stack>
 
-      {/* ✅ Summary Widgets */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} sm={6} md={3}>
           <AppWidgetSummary title="Total Quizzes" total={quizCount} icon="mdi:clipboard-text" color="primary" />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <AppWidgetSummary title="Draft Quizzes" total={draftCount} icon="mdi:file-document-edit-outline" color="secondary" />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <AppWidgetSummary title="Total Users" total={userCount} icon="mdi:account-multiple" color="info" />
@@ -110,7 +119,12 @@ export default function AdminDashboardPage() {
         </Grid>
       </Grid>
 
-      {/* ✅ Recent Quizzes Section */}
+      <Box sx={{ mb: 5 }}>
+        <Button variant="contained" color="secondary" onClick={() => router.push('/admin/users')}>
+          Manage Users
+        </Button>
+      </Box>
+
       <Typography variant="h6" sx={{ mb: 2 }}>
         Recent Quizzes
       </Typography>
@@ -138,6 +152,24 @@ export default function AdminDashboardPage() {
           ))}
         </Stack>
       )}
+
+      <Typography variant="h6" sx={{ mt: 6 }}>
+        Quiz Management Table (Coming Soon)
+      </Typography>
+      <Paper sx={{ p: 3, mt: 2, borderRadius: 2, textAlign: 'center' }}>
+        <Typography variant="body2" color="text.secondary">
+          Soon you’ll be able to view, edit, and delete quizzes in a table format here.
+        </Typography>
+      </Paper>
+
+      <Typography variant="h6" sx={{ mt: 6 }}>
+        Audit Logs
+      </Typography>
+      <Paper sx={{ p: 2, mt: 1, borderRadius: 2 }}>
+        <Typography variant="body2" color="text.secondary">
+          Audit logging of quiz creation, updates, and deletions will appear here.
+        </Typography>
+      </Paper>
     </Container>
   );
 }

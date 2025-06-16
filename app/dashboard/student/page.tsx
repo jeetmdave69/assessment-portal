@@ -1,285 +1,310 @@
-'use client';
+'use client'
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react'
 import {
   Box,
   Button,
+  CircularProgress,
   Container,
   Grid,
   Stack,
   Typography,
-  CircularProgress,
   TextField,
-} from '@mui/material';
-import { useUser, useClerk } from '@clerk/nextjs';
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/utils/supabaseClient';
-import AppWelcome from '@/sections/overview/app-welcome';
-import AppWidgetSummary from '@/sections/overview/app-widget-summary';
-import ThemeToggleButton from '@/components/ThemeToggleButton';
-import DevRoleSwitcher from '@/components/DevRoleSwitcher';
+  Pagination,
+} from '@mui/material'
+import { useUser, useClerk } from '@clerk/nextjs'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/utils/supabaseClient'
+import AppWelcome from '@/sections/overview/app-welcome'
+import AppWidgetSummary from '@/sections/overview/app-widget-summary'
+import { ThemeToggleButton } from '@/components/ThemeToggleButton'
+
+const formatDateTime = (d: Date) =>
+  new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d)
+
+const COMPLETED_PAGE_SIZE = 6
 
 export default function StudentDashboardPage() {
-  const { user } = useUser();
-  const { signOut } = useClerk();
-  const router = useRouter();
+  const { user } = useUser()
+  const { signOut } = useClerk()
+  const router = useRouter()
 
-  const [availableTests, setAvailableTests] = useState(0);
-  const [allQuizzes, setAllQuizzes] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false);
+  const [allQuizzes, setAllQuizzes] = useState<any[]>([])
+  const [userAttempts, setUserAttempts] = useState<Record<number, number>>({})
+  const [availableTests, setAvailableTests] = useState(0)
 
-  const [accessCode, setAccessCode] = useState('');
-  const [codeError, setCodeError] = useState('');
-  const [codeLoading, setCodeLoading] = useState(false);
+  const [loading, setLoading] = useState(true)
+  const [mounted, setMounted] = useState(false)
 
-  const role = user?.publicMetadata?.role;
+  const [completedPage, setCompletedPage] = useState(1)
+
+  const [accessCode, setAccessCode] = useState('')
+  const [codeError, setCodeError] = useState('')
+  const [codeLoading, setCodeLoading] = useState(false)
 
   useEffect(() => {
-    setMounted(true);
-    const fetchQuizzes = async () => {
-      setLoading(true);
-      try {
-        const now = new Date();
-        const { data, error } = await supabase
-          .from('quizzes')
-          .select('*')
-          .eq('is_draft', false)
-          .lte('start_time', now.toISOString())
-          .gte('end_time', now.toISOString());
+    setMounted(true)
+    fetchQuizzes()
+  }, [user])
 
-        if (error) throw error;
+  useEffect(() => {
+    const now = new Date()
+    const avail = allQuizzes.filter((q) => {
+      const end = new Date(q.end_time)
+      return now < end && (userAttempts[q.id] || 0) < (q.max_attempts || 1)
+    })
+    setAvailableTests(avail.length)
+  }, [allQuizzes, userAttempts])
 
-        setAllQuizzes(data || []);
-        setAvailableTests(data?.length || 0);
-      } catch (err) {
-        console.error('Error fetching quizzes:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const fetchQuizzes = async () => {
+    if (!user) return
+    setLoading(true)
+    const { data } = await supabase.from('quizzes').select('*').eq('is_draft', false)
+    setAllQuizzes(data ?? [])
+    if (data?.length) fetchAttempts(data.map((q) => q.id))
+    setLoading(false)
+  }
 
-    fetchQuizzes();
-  }, []);
+  const fetchAttempts = async (ids: number[]) => {
+    const { data } = await supabase.from('attempts').select('quiz_id').eq('user_id', user!.id)
+    const counts: Record<number, number> = {}
+    ids.forEach((id) => (counts[id] = data?.filter((a) => a.quiz_id === id).length ?? 0))
+    setUserAttempts(counts)
+  }
+
+  const now = new Date()
+  const classify = (q: any): 'live' | 'upcoming' | 'completed' | 'expired' => {
+    const start = new Date(q.start_time)
+    const end = new Date(q.end_time)
+    const done = (userAttempts[q.id] || 0) >= (q.max_attempts || 1)
+    if (done) return 'completed'
+    if (now > end) return 'expired'
+    if (now < start) return 'upcoming'
+    return 'live'
+  }
 
   const handleAccessCodeSubmit = async () => {
-    setCodeError('');
+    setCodeError('')
     if (!accessCode.trim()) {
-      setCodeError('Please enter a code.');
-      return;
+      setCodeError('Enter a code.')
+      return
     }
-
-    setCodeLoading(true);
+    setCodeLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('access_code', accessCode.trim())
-        .eq('is_draft', false)
-        .limit(1)
-        .single();
-
-      if (error || !data) {
-        setCodeError('Invalid or expired code.');
-        return;
+      const { data } = await supabase.from('quizzes').select('*').eq('access_code', accessCode).single()
+      if (!data) {
+        setCodeError('Invalid code.')
+        return
       }
-
-      const now = new Date();
-      const start = new Date(data.start_time);
-      const end = new Date(data.end_time);
-
-      if (now < start) {
-        setCodeError('Quiz has not started yet.');
-      } else if (now > end) {
-        setCodeError('This quiz has already ended.');
-      } else {
-        router.push(`/attempt-quiz/${data.id}`);
-      }
-    } catch (err) {
-      setCodeError('Something went wrong. Try again.');
+      const now = new Date()
+      if (now < new Date(data.start_time)) setCodeError('Quiz not started.')
+      else if (now > new Date(data.end_time)) setCodeError('Quiz ended.')
+      else router.push(`/attempt-quiz/${data.id}`)
     } finally {
-      setCodeLoading(false);
+      setCodeLoading(false)
     }
-  };
+  }
 
-  if (!mounted) return null;
+  const liveQuizzes = allQuizzes.filter((q) => classify(q) === 'live')
+  const upcomingQuizzes = allQuizzes.filter((q) => classify(q) === 'upcoming')
+  const completedQuizzes = allQuizzes.filter((q) => ['completed', 'expired'].includes(classify(q)))
+  const currentCompleted = completedQuizzes.slice(
+    (completedPage - 1) * COMPLETED_PAGE_SIZE,
+    completedPage * COMPLETED_PAGE_SIZE,
+  )
+
+  if (!mounted || !user) return null
+
+  const role = ['student', 'teacher', 'admin'].includes(user.publicMetadata?.role as string)
+    ? (user.publicMetadata?.role as 'student' | 'teacher' | 'admin')
+    : 'student'
 
   return (
     <Container maxWidth="xl">
-      {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
- <AppWelcome
-  title={`Welcome, ${user?.firstName || 'Student'}!`}
-  description="Your available assessments are listed below. Good luck!"
-  role={role as 'teacher' | 'student' | 'admin'} // ✅ Pass correct prop
-/>
-
-        <Stack direction="row" spacing={2} alignItems="center">
-          <DevRoleSwitcher />
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+        <Typography variant="h5" fontWeight={700}>
+          Assessment Portal
+        </Typography>
+        <Stack direction="row" spacing={2}>
           <ThemeToggleButton />
-          <Button variant="outlined" color="error" onClick={() => signOut()}>
+          <Button variant="contained" color="error" onClick={() => signOut()}>
             Sign Out
           </Button>
         </Stack>
-      </Stack>
+      </Box>
 
-      {/* Summary */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
+      <AppWelcome
+        title={`Welcome, ${user?.firstName ?? 'Student'}`}
+        description="Here are your assessments."
+        role={role}
+      />
+
+      <Grid container spacing={3} my={4}>
         <Grid item xs={12} sm={6} md={4}>
-          <AppWidgetSummary
-            title="Available Tests"
-            total={availableTests}
-            icon="mdi:file-document-outline"
-            color="info"
-          />
+          <AppWidgetSummary title="Available" total={availableTests} icon="mdi:file-document-outline" color="info" />
         </Grid>
       </Grid>
 
-      {/* Access Code Input */}
-      <Box
-        sx={{
-          mb: 4,
-          p: 3,
-          borderRadius: 3,
-          bgcolor: 'background.paper',
-          boxShadow: 3,
-          border: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
+      <Box mb={6} p={4} borderRadius={3} bgcolor="background.paper" boxShadow={1} border="1px solid" borderColor="divider">
         <Typography variant="h6" gutterBottom>
-          Join a Quiz Using Access Code
+          Access Quiz by Code
         </Typography>
-
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
-            label="Enter Access Code"
-            variant="outlined"
+            label="Access Code"
+            fullWidth
             value={accessCode}
             onChange={(e) => setAccessCode(e.target.value)}
             error={!!codeError}
             helperText={codeError}
-            fullWidth
           />
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleAccessCodeSubmit}
-            disabled={codeLoading}
-            sx={{ minWidth: 160, height: '100%' }}
-          >
-            {codeLoading ? 'Checking...' : 'Start Test'}
+          <Button variant="contained" disabled={codeLoading} onClick={handleAccessCodeSubmit} sx={{ minWidth: 160 }}>
+            {codeLoading ? 'Checking…' : 'Begin'}
           </Button>
         </Stack>
       </Box>
 
-      {/* Quiz Cards */}
-      <Box mt={4}>
-        {loading ? (
-          <Box display="flex" justifyContent="center" py={6}>
-            <CircularProgress />
-          </Box>
-        ) : allQuizzes.length === 0 ? (
-          <Typography variant="h6" align="center" color="text.secondary">
-            No active quizzes available right now.
-          </Typography>
-        ) : (
-          <Grid container spacing={3}>
-            {allQuizzes.map((quiz) => {
-              const now = new Date();
-              const start = new Date(quiz.start_time);
-              const end = new Date(quiz.end_time);
-
-              let status = 'Live';
-              let statusColor = 'info.light';
-              let statusTextColor = 'info.darker';
-
-              if (start > now) {
-                status = 'Upcoming';
-                statusColor = 'warning.light';
-                statusTextColor = 'warning.darker';
-              } else if (end < now) {
-                status = 'Closed';
-                statusColor = 'error.light';
-                statusTextColor = 'error.dark';
-              }
-
-              return (
-                <Grid item xs={12} sm={6} md={4} key={quiz.id}>
-                  <Box
-                    sx={{
-                      p: 3,
-                      borderRadius: 3,
-                      height: '100%',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      bgcolor: 'background.default',
-                      border: '1px solid',
-                      borderColor: 'divider',
-                      boxShadow: 3,
-                      transition: 'transform 0.3s ease, box-shadow 0.3s ease',
-                      '&:hover': {
-                        transform: 'translateY(-6px)',
-                        boxShadow: 6,
-                      },
-                    }}
-                  >
-                    <Stack spacing={1}>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        {quiz.title}
-                      </Typography>
-
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <Box
-                          component="span"
-                          sx={{
-                            fontSize: 12,
-                            px: 1.2,
-                            py: 0.4,
-                            bgcolor: statusColor,
-                            color: statusTextColor,
-                            borderRadius: 2,
-                            fontWeight: 600,
-                            textTransform: 'uppercase',
-                          }}
-                        >
-                          {status}
-                        </Box>
-                        <Typography variant="caption" color="text.secondary">
-                          Ends: {new Date(quiz.end_time).toLocaleTimeString()}
-                        </Typography>
-                      </Stack>
-
-                      <Typography variant="body2" color="text.secondary">
-                        ⏱ Duration: <strong>{quiz.duration_minutes || 0}</strong> mins
-                      </Typography>
-
-                      <Typography variant="body2" color="text.secondary">
-                        🔁 Attempts allowed: <strong>{quiz.max_attempts || 1}</strong>
-                      </Typography>
-
-                      <Typography variant="body2" color="text.secondary">
-                        ✅ Grade to pass: <strong>{quiz.pass_marks}</strong> / {quiz.total_marks}
-                      </Typography>
-                    </Stack>
-
-                    <Button
-                      variant="contained"
-                      color="primary"
-                      sx={{ mt: 3, borderRadius: 2, fontWeight: 600 }}
-                      onClick={() => router.push(`/attempt-quiz/${quiz.id}`)}
-                      disabled={status !== 'Live'}
-                    >
-                      🚀 Attempt Quiz
-                    </Button>
-                  </Box>
-                </Grid>
-              );
-            })}
-          </Grid>
-        )}
-      </Box>
+      {loading ? (
+        <Box py={6} display="flex" justifyContent="center">
+          <CircularProgress />
+        </Box>
+      ) : (
+        <>
+          {liveQuizzes.length > 0 && (
+            <>
+              <Typography variant="h6" mb={2}>Live</Typography>
+              <Grid container spacing={3} mb={6}>
+                {liveQuizzes.map((q) => (
+                  <QuizCard
+                    key={q.id}
+                    quiz={q}
+                    status="live"
+                    attempts={userAttempts[q.id] || 0}
+                    onStart={() => router.push(`/attempt-quiz/${q.id}`)}
+                  />
+                ))}
+              </Grid>
+            </>
+          )}
+          {upcomingQuizzes.length > 0 && (
+            <>
+              <Typography variant="h6" mb={2}>Upcoming</Typography>
+              <Grid container spacing={3} mb={6}>
+                {upcomingQuizzes.map((q) => (
+                  <QuizCard key={q.id} quiz={q} status="upcoming" attempts={0} onStart={() => {}} />
+                ))}
+              </Grid>
+            </>
+          )}
+          {completedQuizzes.length > 0 && (
+            <>
+              <Typography variant="h6" mb={2}>Completed / Expired</Typography>
+              <Grid container spacing={3}>
+                {currentCompleted.map((q) => (
+                  <QuizCard
+                    key={q.id}
+                    quiz={q}
+                    status={classify(q) as 'completed' | 'expired'}
+                    attempts={userAttempts[q.id] || 0}
+                    onStart={() => {}}
+                  />
+                ))}
+              </Grid>
+              {completedQuizzes.length > COMPLETED_PAGE_SIZE && (
+                <Box mt={3} display="flex" justifyContent="center">
+                  <Pagination
+                    shape="rounded"
+                    color="primary"
+                    count={Math.ceil(completedQuizzes.length / COMPLETED_PAGE_SIZE)}
+                    page={completedPage}
+                    onChange={(_, p) => setCompletedPage(p)}
+                  />
+                </Box>
+              )}
+            </>
+          )}
+        </>
+      )}
     </Container>
-  );
+  )
+}
+
+function QuizCard({
+  quiz,
+  status,
+  attempts,
+  onStart,
+}: {
+  quiz: any
+  status: 'live' | 'upcoming' | 'completed' | 'expired'
+  attempts: number
+  onStart: () => void
+}) {
+  const start = new Date(quiz.start_time)
+  const end = new Date(quiz.end_time)
+
+  const map = {
+    live: { badge: 'LIVE', bg: 'info.light', text: 'info.darker', btn: 'primary', disabled: false },
+    upcoming: { badge: 'UPCOMING', bg: 'warning.light', text: 'warning.darker', btn: 'secondary', disabled: true },
+    completed: { badge: 'COMPLETED', bg: 'success.light', text: 'success.darker', btn: 'secondary', disabled: true },
+    expired: { badge: 'EXPIRED', bg: 'error.light', text: 'error.darker', btn: 'secondary', disabled: true },
+  }[status]
+
+  return (
+    <Grid item xs={12} sm={6} md={4}>
+      <Box
+        p={3}
+        borderRadius={3}
+        border="1px solid"
+        borderColor="divider"
+        bgcolor="background.paper"
+        boxShadow={3}
+        minHeight={310}
+        display="flex"
+        flexDirection="column"
+        justifyContent="space-between"
+        sx={{ '&:hover': { transform: status === 'live' ? 'translateY(-4px)' : undefined }, transition: '.2s' }}
+      >
+        <Stack spacing={1}>
+          <Typography variant="h6" fontWeight={700}>{quiz.quiz_title}</Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Box px={1.5} py={0.4} borderRadius={2} fontSize={12} fontWeight={600} textTransform="uppercase" bgcolor={map.bg} color={map.text}>
+              {map.badge}
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              Starts: {formatDateTime(start)}
+            </Typography>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" ml={6}>
+            Ends: {formatDateTime(end)}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Duration: <strong>{quiz.duration_minutes} min</strong>
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Attempts: <strong>{attempts}</strong> / {quiz.max_attempts}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Pass: <strong>{quiz.pass_marks}</strong> / {quiz.total_marks}
+          </Typography>
+        </Stack>
+        <Button
+          variant="contained"
+          color={map.btn as any}
+          disabled={map.disabled}
+          onClick={onStart}
+          sx={{ mt: 3, textTransform: 'none', fontWeight: 600 }}
+        >
+          {status === 'live' ? 'Start Quiz' : map.badge}
+        </Button>
+      </Box>
+    </Grid>
+  )
 }
