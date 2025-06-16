@@ -1,4 +1,3 @@
-// src/theme/theme.ts
 'use client';
 
 import {
@@ -10,7 +9,16 @@ import { typography } from './typography';
 import { components } from './components';
 import { shadows } from './shadows';
 
-export const theme = extendTheme({
+// Shared theme options
+const baseOptions = {
+  typography,
+  components,
+  shadows,
+};
+
+// Define light and dark themes separately
+export const lightTheme = extendTheme({
+  ...baseOptions,
   colorSchemes: {
     light: {
       palette: {
@@ -18,6 +26,12 @@ export const theme = extendTheme({
         ...palette.light,
       },
     },
+  },
+});
+
+export const darkTheme = extendTheme({
+  ...baseOptions,
+  colorSchemes: {
     dark: {
       palette: {
         mode: 'dark',
@@ -27,7 +41,7 @@ export const theme = extendTheme({
       },
     },
   },
-  typography,
-  components,
-  shadows,
 });
+
+// Optionally export a default combined theme
+export const theme = lightTheme;

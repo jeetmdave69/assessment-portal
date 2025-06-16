@@ -9,23 +9,35 @@ type AppWelcomeProps = {
   title?: string;
   description?: string;
   img?: string;
-  role?: 'teacher' | 'student' | 'admin'; // ✅ Add role prop
+  role?: 'teacher' | 'student' | 'admin';
+  showCreateQuizButton?: boolean; // ✅ Optional override
+  createQuizAction?: () => void;  // ✅ Optional handler
 };
 
 export default function AppWelcome({
   title,
   description,
   img = '/assets/images/background-4.jpg',
-  role = 'student', // ✅ Default to 'student'
+  role = 'student',
+  showCreateQuizButton,
+  createQuizAction,
 }: AppWelcomeProps) {
   const { user } = useUser();
   const router = useRouter();
 
   const handleCreateQuiz = useCallback(() => {
-    router.push('/create-quiz');
-  }, [router]);
+    if (createQuizAction) {
+      createQuizAction();
+    } else {
+      router.push('/create-quiz');
+    }
+  }, [createQuizAction, router]);
 
-  const showCreateQuizButton = role === 'teacher'; // ✅ Only for teacher
+  // ✅ Default to true for teachers, false otherwise
+  const shouldShowCreateButton =
+    typeof showCreateQuizButton === 'boolean'
+      ? showCreateQuizButton
+      : role === 'teacher';
 
   return (
     <Card
@@ -82,7 +94,7 @@ export default function AppWelcome({
             'Create, manage, and analyze assessments seamlessly with your personal dashboard.'}
         </Typography>
 
-        {showCreateQuizButton && (
+        {shouldShowCreateButton && (
           <Button
             variant="contained"
             color="primary"
