@@ -66,8 +66,10 @@ export default function ResultPage() {
         .eq('quiz_id', attemptData.quiz_id);
 
       const parsedQuestions = (questionData || []).map((q: any) => {
-        const options = JSON.parse(q.options || '[]');
-        const correct = JSON.parse(q.correct_answers || '[]');
+        // Check if options is already an object, if not parse it
+        const options = typeof q.options === 'string' ? JSON.parse(q.options || '[]') : q.options || [];
+        // Check if correct_answers is already an object, if not parse it
+        const correct = typeof q.correct_answers === 'string' ? JSON.parse(q.correct_answers || '[]') : q.correct_answers || [];
 
         return {
           id: q.id,
@@ -87,8 +89,8 @@ export default function ResultPage() {
       setQuizTitle(quiz?.quiz_title || 'Untitled Quiz');
       setAttempt({
         ...attemptData,
-        answers: JSON.parse(attemptData.answers || '{}'),
-        correct_answers: JSON.parse(attemptData.correct_answers || '{}'),
+        answers: typeof attemptData.answers === 'string' ? JSON.parse(attemptData.answers || '{}') : attemptData.answers || {},
+        correct_answers: typeof attemptData.correct_answers === 'string' ? JSON.parse(attemptData.correct_answers || '{}') : attemptData.correct_answers || {},
       });
       setQuestions(parsedQuestions);
       setLoading(false);
@@ -116,6 +118,14 @@ export default function ResultPage() {
     return (
       <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
         <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (!attempt) {
+    return (
+      <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
+        <Typography variant="h6">Attempt not found</Typography>
       </Box>
     );
   }

@@ -1,6 +1,6 @@
-'use client'
+'use client';
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 import {
   Box,
   Button,
@@ -11,13 +11,15 @@ import {
   Typography,
   TextField,
   Pagination,
-} from '@mui/material'
-import { useUser, useClerk } from '@clerk/nextjs'
-import { useRouter } from 'next/navigation'
-import { supabase } from '@/utils/supabaseClient'
-import AppWelcome from '@/sections/overview/app-welcome'
-import AppWidgetSummary from '@/sections/overview/app-widget-summary'
-import { ThemeToggleButton } from '@/components/ThemeToggleButton'
+  Tabs,
+  Tab,
+} from '@mui/material';
+import { useUser, useClerk } from '@clerk/nextjs';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/utils/supabaseClient';
+import AppWelcome from '@/sections/overview/app-welcome';
+import AppWidgetSummary from '@/sections/overview/app-widget-summary';
+import { ThemeToggleButton } from '@/components/ThemeToggleButton';
 
 const formatDateTime = (d: Date) =>
   new Intl.DateTimeFormat('en-GB', {
@@ -27,116 +29,110 @@ const formatDateTime = (d: Date) =>
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-  }).format(d)
+  }).format(d);
 
-const COMPLETED_PAGE_SIZE = 6
+const COMPLETED_PAGE_SIZE = 6;
 
 export default function StudentDashboardPage() {
-  const { user } = useUser()
-  const { signOut } = useClerk()
-  const router = useRouter()
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const router = useRouter();
 
-  const [allQuizzes, setAllQuizzes] = useState<any[]>([])
-  const [userAttempts, setUserAttempts] = useState<Record<number, number>>({})
-  const [availableTests, setAvailableTests] = useState(0)
-
-  const [loading, setLoading] = useState(true)
-  const [mounted, setMounted] = useState(false)
-
-  const [completedPage, setCompletedPage] = useState(1)
-
-  const [accessCode, setAccessCode] = useState('')
-  const [codeError, setCodeError] = useState('')
-  const [codeLoading, setCodeLoading] = useState(false)
+  const [allQuizzes, setAllQuizzes] = useState<any[]>([]);
+  const [userAttempts, setUserAttempts] = useState<Record<number, number>>({});
+  const [availableTests, setAvailableTests] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
+  const [completedPage, setCompletedPage] = useState(1);
+  const [accessCode, setAccessCode] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [tab, setTab] = useState(0);
 
   useEffect(() => {
-    setMounted(true)
-    fetchQuizzes()
-  }, [user])
+    setMounted(true);
+    fetchQuizzes();
+  }, [user]);
 
   useEffect(() => {
-    const now = new Date()
+    const now = new Date();
     const avail = allQuizzes.filter((q) => {
-      const end = new Date(q.end_time)
-      return now < end && (userAttempts[q.id] || 0) < (q.max_attempts || 1)
-    })
-    setAvailableTests(avail.length)
-  }, [allQuizzes, userAttempts])
+      const end = new Date(q.end_time);
+      return now < end && (userAttempts[q.id] || 0) < (q.max_attempts || 1);
+    });
+    setAvailableTests(avail.length);
+  }, [allQuizzes, userAttempts]);
 
   const fetchQuizzes = async () => {
-    if (!user) return
-    setLoading(true)
-    const { data } = await supabase.from('quizzes').select('*').eq('is_draft', false)
-    setAllQuizzes(data ?? [])
-    if (data?.length) fetchAttempts(data.map((q) => q.id))
-    setLoading(false)
-  }
+    if (!user) return;
+    setLoading(true);
+    const { data } = await supabase.from('quizzes').select('*').eq('is_draft', false);
+    setAllQuizzes(data ?? []);
+    if (data?.length) fetchAttempts(data.map((q) => q.id));
+    setLoading(false);
+  };
 
   const fetchAttempts = async (ids: number[]) => {
-    const { data } = await supabase.from('attempts').select('quiz_id').eq('user_id', user!.id)
-    const counts: Record<number, number> = {}
-    ids.forEach((id) => (counts[id] = data?.filter((a) => a.quiz_id === id).length ?? 0))
-    setUserAttempts(counts)
-  }
+    const { data } = await supabase.from('attempts').select('quiz_id').eq('user_id', user!.id);
+    const counts: Record<number, number> = {};
+    ids.forEach((id) => (counts[id] = data?.filter((a) => a.quiz_id === id).length ?? 0));
+    setUserAttempts(counts);
+  };
 
-  const now = new Date()
+  const now = new Date();
   const classify = (q: any): 'live' | 'upcoming' | 'completed' | 'expired' => {
-    const start = new Date(q.start_time)
-    const end = new Date(q.end_time)
-    const done = (userAttempts[q.id] || 0) >= (q.max_attempts || 1)
-    if (done) return 'completed'
-    if (now > end) return 'expired'
-    if (now < start) return 'upcoming'
-    return 'live'
-  }
+    const start = new Date(q.start_time);
+    const end = new Date(q.end_time);
+    const done = (userAttempts[q.id] || 0) >= (q.max_attempts || 1);
+    if (done) return 'completed';
+    if (now > end) return 'expired';
+    if (now < start) return 'upcoming';
+    return 'live';
+  };
 
   const handleAccessCodeSubmit = async () => {
-    setCodeError('')
+    setCodeError('');
     if (!accessCode.trim()) {
-      setCodeError('Enter a code.')
-      return
+      setCodeError('Enter a code.');
+      return;
     }
-    setCodeLoading(true)
+    setCodeLoading(true);
     try {
-      const { data } = await supabase.from('quizzes').select('*').eq('access_code', accessCode).single()
+      const { data } = await supabase.from('quizzes').select('*').eq('access_code', accessCode).single();
       if (!data) {
-        setCodeError('Invalid code.')
-        return
+        setCodeError('Invalid code.');
+        return;
       }
-      const now = new Date()
-      if (now < new Date(data.start_time)) setCodeError('Quiz not started.')
-      else if (now > new Date(data.end_time)) setCodeError('Quiz ended.')
-      else router.push(`/attempt-quiz/${data.id}`)
+      const now = new Date();
+      if (now < new Date(data.start_time)) setCodeError('Quiz not started.');
+      else if (now > new Date(data.end_time)) setCodeError('Quiz ended.');
+      else router.push(`/attempt-quiz/${data.id}`);
     } finally {
-      setCodeLoading(false)
+      setCodeLoading(false);
     }
-  }
+  };
 
-  const liveQuizzes = allQuizzes.filter((q) => classify(q) === 'live')
-  const upcomingQuizzes = allQuizzes.filter((q) => classify(q) === 'upcoming')
-  const completedQuizzes = allQuizzes.filter((q) => ['completed', 'expired'].includes(classify(q)))
+  const liveQuizzes = allQuizzes.filter((q) => classify(q) === 'live');
+  const upcomingQuizzes = allQuizzes.filter((q) => classify(q) === 'upcoming');
+  const completedQuizzes = allQuizzes.filter((q) => ['completed', 'expired'].includes(classify(q)));
   const currentCompleted = completedQuizzes.slice(
     (completedPage - 1) * COMPLETED_PAGE_SIZE,
-    completedPage * COMPLETED_PAGE_SIZE,
-  )
+    completedPage * COMPLETED_PAGE_SIZE
+  );
 
-  if (!mounted || !user) return null
+  if (!mounted || !user) return null;
 
   const role = ['student', 'teacher', 'admin'].includes(user.publicMetadata?.role as string)
     ? (user.publicMetadata?.role as 'student' | 'teacher' | 'admin')
-    : 'student'
+    : 'student';
 
   return (
     <Container maxWidth="xl">
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
-        <Typography variant="h5" fontWeight={700}>
-          Assessment Portal
-        </Typography>
+        <Typography variant="h5" fontWeight={700}>Assessment Portal</Typography>
         <Stack direction="row" spacing={2}>
           <ThemeToggleButton />
-          <Button variant="contained" color="error" onClick={() => signOut()}>
-            Sign Out
-          </Button>
+          <Button variant="contained" color="error" onClick={() => signOut()}>Sign Out</Button>
         </Stack>
       </Box>
 
@@ -144,96 +140,116 @@ export default function StudentDashboardPage() {
         title={`Welcome, ${user?.firstName ?? 'Student'}`}
         description="Here are your assessments."
         role={role}
+        showCreateQuizButton={false}
       />
 
-      <Grid container spacing={3} my={4}>
-        <Grid item xs={12} sm={6} md={4}>
-          <AppWidgetSummary title="Available" total={availableTests} icon="mdi:file-document-outline" color="info" />
-        </Grid>
-      </Grid>
+      <Tabs value={tab} onChange={(_, newTab) => setTab(newTab)} sx={{ mb: 4 }}>
+        <Tab label="Overview" />
+        <Tab label="Quizzes" />
+      </Tabs>
 
-      <Box mb={6} p={4} borderRadius={3} bgcolor="background.paper" boxShadow={1} border="1px solid" borderColor="divider">
-        <Typography variant="h6" gutterBottom>
-          Access Quiz by Code
-        </Typography>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-          <TextField
-            label="Access Code"
-            fullWidth
-            value={accessCode}
-            onChange={(e) => setAccessCode(e.target.value)}
-            error={!!codeError}
-            helperText={codeError}
-          />
-          <Button variant="contained" disabled={codeLoading} onClick={handleAccessCodeSubmit} sx={{ minWidth: 160 }}>
-            {codeLoading ? 'Checking…' : 'Begin'}
-          </Button>
-        </Stack>
-      </Box>
-
-      {loading ? (
-        <Box py={6} display="flex" justifyContent="center">
-          <CircularProgress />
-        </Box>
-      ) : (
+      {tab === 0 && (
         <>
-          {liveQuizzes.length > 0 && (
-            <>
-              <Typography variant="h6" mb={2}>Live</Typography>
-              <Grid container spacing={3} mb={6}>
-                {liveQuizzes.map((q) => (
-                  <QuizCard
-                    key={q.id}
-                    quiz={q}
-                    status="live"
-                    attempts={userAttempts[q.id] || 0}
-                    onStart={() => router.push(`/attempt-quiz/${q.id}`)}
-                  />
-                ))}
-              </Grid>
-            </>
-          )}
-          {upcomingQuizzes.length > 0 && (
-            <>
-              <Typography variant="h6" mb={2}>Upcoming</Typography>
-              <Grid container spacing={3} mb={6}>
-                {upcomingQuizzes.map((q) => (
-                  <QuizCard key={q.id} quiz={q} status="upcoming" attempts={0} onStart={() => {}} />
-                ))}
-              </Grid>
-            </>
-          )}
-          {completedQuizzes.length > 0 && (
-            <>
-              <Typography variant="h6" mb={2}>Completed / Expired</Typography>
-              <Grid container spacing={3}>
-                {currentCompleted.map((q) => (
-                  <QuizCard
-                    key={q.id}
-                    quiz={q}
-                    status={classify(q) as 'completed' | 'expired'}
-                    attempts={userAttempts[q.id] || 0}
-                    onStart={() => {}}
-                  />
-                ))}
-              </Grid>
-              {completedQuizzes.length > COMPLETED_PAGE_SIZE && (
-                <Box mt={3} display="flex" justifyContent="center">
-                  <Pagination
-                    shape="rounded"
-                    color="primary"
-                    count={Math.ceil(completedQuizzes.length / COMPLETED_PAGE_SIZE)}
-                    page={completedPage}
-                    onChange={(_, p) => setCompletedPage(p)}
-                  />
-                </Box>
-              )}
-            </>
-          )}
+          <Grid container spacing={3} my={4}>
+            <Grid item xs={12} sm={6} md={4}>
+              <AppWidgetSummary title="Available" total={availableTests} icon="mdi:file-document-outline" color="info" />
+            </Grid>
+          </Grid>
+
+          <Box mb={6} p={4} borderRadius={3} bgcolor="background.paper" boxShadow={1} border="1px solid" borderColor="divider">
+            <Typography variant="h6" gutterBottom>Access Quiz by Code</Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              <TextField
+                label="Access Code"
+                fullWidth
+                value={accessCode}
+                onChange={(e) => setAccessCode(e.target.value)}
+                error={!!codeError}
+                helperText={codeError}
+              />
+              <Button variant="contained" disabled={codeLoading} onClick={handleAccessCodeSubmit} sx={{ minWidth: 160 }}>
+                {codeLoading ? 'Checking…' : 'Begin'}
+              </Button>
+            </Stack>
+          </Box>
         </>
       )}
+
+      {tab === 1 && (
+        loading ? (
+          <Box py={6} display="flex" justifyContent="center">
+            <CircularProgress />
+          </Box>
+        ) : (
+          <>
+            <Box mb={6}>
+              {liveQuizzes.length > 0 && (
+                <>
+                  <Typography variant="h6" mb={2}>Live</Typography>
+                  <Grid container spacing={3}>
+                    {liveQuizzes.map((q) => (
+                      <QuizCard
+                        key={q.id}
+                        quiz={q}
+                        status="live"
+                        attempts={userAttempts[q.id] || 0}
+                        onStart={() => router.push(`/attempt-quiz/${q.id}`)}
+                      />
+                    ))}
+                  </Grid>
+                </>
+              )}
+
+              {upcomingQuizzes.length > 0 && (
+                <>
+                  <Typography variant="h6" mb={2}>Upcoming</Typography>
+                  <Grid container spacing={3}>
+                    {upcomingQuizzes.map((q) => (
+                      <QuizCard
+                        key={q.id}
+                        quiz={q}
+                        status="upcoming"
+                        attempts={0}
+                        onStart={() => {}}
+                      />
+                    ))}
+                  </Grid>
+                </>
+              )}
+
+              {completedQuizzes.length > 0 && (
+                <>
+                  <Typography variant="h6" mb={2}>Completed / Expired</Typography>
+                  <Grid container spacing={3}>
+                    {currentCompleted.map((q) => (
+                      <QuizCard
+                        key={q.id}
+                        quiz={q}
+                        status={classify(q)}
+                        attempts={userAttempts[q.id] || 0}
+                        onStart={() => {}}
+                      />
+                    ))}
+                  </Grid>
+                  {completedQuizzes.length > COMPLETED_PAGE_SIZE && (
+                    <Box mt={3} display="flex" justifyContent="center">
+                      <Pagination
+                        shape="rounded"
+                        color="primary"
+                        count={Math.ceil(completedQuizzes.length / COMPLETED_PAGE_SIZE)}
+                        page={completedPage}
+                        onChange={(_, p) => setCompletedPage(p)}
+                      />
+                    </Box>
+                  )}
+                </>
+              )}
+            </Box>
+          </>
+        )
+      )}
     </Container>
-  )
+  );
 }
 
 function QuizCard({
@@ -242,20 +258,20 @@ function QuizCard({
   attempts,
   onStart,
 }: {
-  quiz: any
-  status: 'live' | 'upcoming' | 'completed' | 'expired'
-  attempts: number
-  onStart: () => void
+  quiz: any;
+  status: 'live' | 'upcoming' | 'completed' | 'expired';
+  attempts: number;
+  onStart: () => void;
 }) {
-  const start = new Date(quiz.start_time)
-  const end = new Date(quiz.end_time)
+  const start = new Date(quiz.start_time);
+  const end = new Date(quiz.end_time);
 
   const map = {
     live: { badge: 'LIVE', bg: 'info.light', text: 'info.darker', btn: 'primary', disabled: false },
     upcoming: { badge: 'UPCOMING', bg: 'warning.light', text: 'warning.darker', btn: 'secondary', disabled: true },
     completed: { badge: 'COMPLETED', bg: 'success.light', text: 'success.darker', btn: 'secondary', disabled: true },
     expired: { badge: 'EXPIRED', bg: 'error.light', text: 'error.darker', btn: 'secondary', disabled: true },
-  }[status]
+  }[status];
 
   return (
     <Grid item xs={12} sm={6} md={4}>
@@ -278,22 +294,12 @@ function QuizCard({
             <Box px={1.5} py={0.4} borderRadius={2} fontSize={12} fontWeight={600} textTransform="uppercase" bgcolor={map.bg} color={map.text}>
               {map.badge}
             </Box>
-            <Typography variant="caption" color="text.secondary">
-              Starts: {formatDateTime(start)}
-            </Typography>
+            <Typography variant="caption" color="text.secondary">Starts: {formatDateTime(start)}</Typography>
           </Stack>
-          <Typography variant="caption" color="text.secondary" ml={6}>
-            Ends: {formatDateTime(end)}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Duration: <strong>{quiz.duration_minutes} min</strong>
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Attempts: <strong>{attempts}</strong> / {quiz.max_attempts}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Pass: <strong>{quiz.pass_marks}</strong> / {quiz.total_marks}
-          </Typography>
+          <Typography variant="caption" color="text.secondary" ml={6}>Ends: {formatDateTime(end)}</Typography>
+          <Typography variant="body2" color="text.secondary">Duration: <strong>{quiz.duration_minutes} min</strong></Typography>
+          <Typography variant="body2" color="text.secondary">Attempts: <strong>{attempts}</strong> / {quiz.max_attempts}</Typography>
+          <Typography variant="body2" color="text.secondary">Pass: <strong>{quiz.pass_marks}</strong> / {quiz.total_marks}</Typography>
         </Stack>
         <Button
           variant="contained"
@@ -306,5 +312,5 @@ function QuizCard({
         </Button>
       </Box>
     </Grid>
-  )
+  );
 }

@@ -12,9 +12,15 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  FormControl,
   FormControlLabel,
   IconButton,
+  InputLabel,
+  MenuItem,
   Paper,
+  Radio,
+  Select,
+  SelectChangeEvent,
   Snackbar,
   Stack,
   TextField,
@@ -29,29 +35,85 @@ import { v4 as uuidv4 } from 'uuid';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { quizSchema, QuizFormValues } from '@/schemas/quizSchema';
-import { LocalizationProvider, DateTimePicker } from '@mui/x-date-pickers';
+import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { useThemeMode } from '@/providers/ThemeModeProvider';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import dayjs from 'dayjs';
 import Papa from 'papaparse';
+
+interface QuizOption {
+  text: string;
+  image?: string | null;
+  isCorrect: boolean;
+}
+
+interface QuizQuestion {
+  question: string;
+  questionType: 'single' | 'multiple';
+  image?: string | null;
+  explanation?: string;
+  marks: string;
+  options: QuizOption[];
+}
+
+interface QuizResponse {
+  id: string;
+  access_code: string;
+}
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-async function uploadImageToSupabase(file: File, pathPrefix: string) {
+async function uploadImageToSupabase(file: File, pathPrefix: string): Promise<string> {
   const fileName = `${pathPrefix}/${uuidv4()}-${file.name}`;
   const { error } = await supabase.storage.from('quiz-option-images').upload(fileName, file);
   if (error) throw error;
-
-  const { data: publicUrlData } = supabase.storage.from('quiz-option-images').getPublicUrl(fileName);
-  return publicUrlData.publicUrl;
+  return supabase.storage.from('quiz-option-images').getPublicUrl(fileName).data.publicUrl;
 }
+
+const ModernDateTimePicker = ({ 
+  label, 
+  value, 
+  onChange 
+}: {
+  label: string;
+  value: Date;
+  onChange: (date: Date | null) => void;
+}) => (
+  <DateTimePicker
+    label={label}
+    value={dayjs(value)}
+    onChange={(newValue) => onChange(newValue?.toDate() || null)}
+    slotProps={{
+      textField: {
+        fullWidth: true,
+        variant: 'outlined',
+        sx: { 
+          '& .MuiInputBase-root': { height: '56px' },
+          '& .MuiOutlinedInput-root': {
+            '&:hover fieldset': { borderColor: 'primary.main' }
+          }
+        }
+      },
+      popper: {
+        sx: {
+          '& .MuiPaper-root': {
+            boxShadow: '0px 4px 20px rgba(0, 0, 0, 0.15)',
+            borderRadius: '12px',
+          }
+        }
+      }
+    }}
+  />
+);
 
 export default function CreateQuizPage() {
   const { mode, toggleMode } = useThemeMode();
@@ -72,6 +134,7 @@ export default function CreateQuizPage() {
     resolver: zodResolver(quizSchema),
     defaultValues: {
       quizTitle: '',
+      description: '',
       totalMarks: '0',
       duration: '0',
       startDateTime: dayjs().toDate(),
@@ -80,11 +143,15 @@ export default function CreateQuizPage() {
       shuffleOptions: false,
       maxAttempts: '1',
       previewMode: false,
+      showCorrectAnswers: false,
+      passingScore: '0',
       questions: [
         {
           question: '',
+          questionType: 'single',
           image: null,
           explanation: '',
+          marks: '1',
           options: [
             { text: '', image: null, isCorrect: false },
             { text: '', image: null, isCorrect: false },
@@ -94,20 +161,8 @@ export default function CreateQuizPage() {
     },
   });
 
-  const {
-    control,
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    reset,
-    formState: { errors },
-  } = methods;
-
-  const { fields: questionFields, append, remove } = useFieldArray({
-    control,
-    name: 'questions',
-  });
+  const { control, register, handleSubmit, setValue, watch, reset, formState: { errors } } = methods;
+  const { fields: questionFields, append, remove } = useFieldArray({ control, name: 'questions' });
 
   useEffect(() => setMounted(true), []);
 
@@ -115,231 +170,282 @@ export default function CreateQuizPage() {
     setToast({ open: true, msg, type });
   };
 
-  // CSV upload to parse questions with multiple correct answers
-const handleCsvUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const file = event.target.files?.[0];
-  if (!file) return;
+  const handleCsvUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-  Papa.parse(file, {
-    header: true,
-    skipEmptyLines: true,
-    complete: (result) => {
-      try {
-        const parsedData = result.data as any[];
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        try {
+          const parsedQuestions: QuizQuestion[] = result.data.map((row: any) => {
+            const correctAnswers = (row.correct_answers || '').split(';').map((s: string) => s.trim());
+            const questionType = correctAnswers.length > 1 ? 'multiple' : 'single';
 
-        const parsedQuestions = parsedData.map((row) => {
-          const correctAnswers = (row.correct_answers || '')
-            .split(';')
-            .map((str: string) => str.trim());
-
-          return {
-            question: row.question || '',
-            explanation: row.explanation || '',
-            image: null,
-            options: [1, 2, 3, 4].map((i) => {
-              const optionText = row[`option${i}`] || '';
-              return {
-                text: optionText,
+            const options = [1, 2, 3, 4]
+              .map((i) => ({
+                text: row[`option${i}`] || '',
                 image: null,
-                isCorrect: correctAnswers.includes(optionText),
-              };
-            }),
-          };
-        });
+                isCorrect: correctAnswers.includes((row[`option${i}`] || '').trim()),
+              }))
+              .filter(opt => opt.text);
 
-        setValue('questions', parsedQuestions);
-        showToast('CSV uploaded and parsed successfully!', 'success');
-      } catch {
-        showToast('Error parsing CSV. Please check the CSV format.', 'error');
-      }
-    },
-    error: () => {
-      showToast('Failed to read CSV file.', 'error');
-    },
-  });
-};
+            return {
+              question: row.question || '',
+              questionType,
+              explanation: row.explanation || '',
+              marks: row.marks || '1',
+              image: null,
+              options: options.length >= 2 ? options : [
+                { text: '', image: null, isCorrect: false },
+                { text: '', image: null, isCorrect: false },
+              ]
+            };
+          });
 
+          setValue('questions', parsedQuestions);
+          showToast('CSV imported successfully!', 'success');
+        } catch {
+          showToast('Invalid CSV format', 'error');
+        }
+      },
+      error: () => showToast('Failed to read CSV', 'error'),
+    });
+  };
 
   const onSubmit = async (data: QuizFormValues, isDraft: boolean) => {
     if (!isLoaded || !isSignedIn || !user?.id) {
-      showToast('Please sign in before creating a quiz.', 'error');
+      showToast('Please sign in', 'error');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const generatedCode = uuidv4().split('-')[0];
-
-      const { data: insertedQuiz, error: quizError } = await supabase
+      const accessCode = uuidv4().split('-')[0];
+      
+      // 1. First create the quiz entry
+      const { data: quiz, error: quizError } = await supabase
         .from('quizzes')
-        .insert([
-          {
-            quiz_title: data.quizTitle,
-            total_marks: parseInt(data.totalMarks),
-            duration: parseInt(data.duration),
-            start_time: data.startDateTime.toISOString(),
-            end_time: data.expiryDateTime.toISOString(),
-            shuffle_questions: data.shuffleQuestions,
-            shuffle_options: data.shuffleOptions,
-            max_attempts: parseInt(data.maxAttempts),
-            preview_mode: data.previewMode,
-            access_code: generatedCode,
-            is_draft: isDraft,
-            score: 0,
-            user_id: user.id,
-            creator_id: user.id,
-          },
-        ])
-        .select('id')
+        .insert({
+          quiz_title: data.quizTitle,
+          description: data.description,
+          total_marks: parseInt(data.totalMarks) || data.questions.reduce((sum, q) => sum + parseInt(q.marks), 0),
+          duration: parseInt(data.duration),
+          start_time: data.startDateTime.toISOString(),
+          end_time: data.expiryDateTime.toISOString(),
+          shuffle_questions: data.shuffleQuestions,
+          shuffle_options: data.shuffleOptions,
+          max_attempts: parseInt(data.maxAttempts),
+          preview_mode: data.previewMode,
+          show_correct_answers: data.showCorrectAnswers,
+          passing_score: parseInt(data.passingScore),
+          access_code: accessCode,
+          is_draft: isDraft,
+          user_id: user.id,
+        })
+        .select('id, access_code')
         .single();
 
       if (quizError) throw quizError;
-      const quizId = insertedQuiz.id;
+      if (!quiz) throw new Error('Failed to create quiz');
 
-      const questionsPayload = data.questions.map((q) => ({
-        quiz_id: quizId,
-        quiz_title: data.quizTitle, 
-        question_text: q.question,
-        explanation: q.explanation,
-        options: JSON.stringify(
-          q.options.map((opt) => ({
+      // 2. Process all questions
+      for (const q of data.questions) {
+        // Upload question image if exists
+        const questionImageUrl = q.image instanceof File 
+          ? await uploadImageToSupabase(q.image, 'questions') 
+          : q.image;
+
+        // Process all option images in parallel
+        const processedOptions = await Promise.all(
+          q.options.map(async (opt) => ({
             text: opt.text,
-            image: opt.image || null,
-            isCorrect: opt.isCorrect,
+            image: opt.image instanceof File 
+              ? await uploadImageToSupabase(opt.image, 'options') 
+              : opt.image,
+            is_correct: opt.isCorrect,
           }))
-        ),
-        correct_answers: JSON.stringify(q.options.filter((opt) => opt.isCorrect).map((opt) => opt.text)),
-      }));
+        );
 
-      const { error: questionsError } = await supabase.from('questions').insert(questionsPayload);
-      if (questionsError) throw questionsError;
+        // Prepare correct answers array (indices of correct options)
+        const correctAnswers = processedOptions
+          .map((opt, index) => opt.is_correct ? index : null)
+          .filter(index => index !== null);
+
+        // Insert question with all data
+        const { error: questionError } = await supabase
+          .from('questions')
+          .insert({
+            quiz_id: quiz.id,
+            question_text: q.question,
+            question_type: q.questionType,
+            explanation: q.explanation,
+            marks: parseInt(q.marks),
+            image_url: questionImageUrl,
+            options: processedOptions,
+            correct_answers: correctAnswers,
+            blank_answers: null,
+            matching_pairs: null
+          });
+
+        if (questionError) throw questionError;
+      }
 
       reset();
-      if (isDraft) {
-        showToast('Quiz saved as draft!', 'success');
-      } else {
-        setAccessCode(generatedCode);
+      if (!isDraft) {
+        setAccessCode(quiz.access_code);
         setOpenDialog(true);
       }
+      showToast(`Quiz ${isDraft ? 'saved as draft' : 'published'}!`, 'success');
     } catch (err: any) {
-      console.error(err);
-      showToast(err?.message || 'Failed to save quiz.', 'error');
+      console.error('Quiz submission error:', err);
+      showToast(err.message || 'Error saving quiz', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (!mounted) return null;
+  const renderOptions = (qIndex: number, options: QuizOption[], questionType: 'single' | 'multiple') => {
+    const handleOptionChange = (optIndex: number, isCorrect: boolean) => {
+      if (questionType === 'single') {
+        options.forEach((_, idx) => {
+          setValue(`questions.${qIndex}.options.${idx}.isCorrect`, idx === optIndex);
+        });
+      } else {
+        setValue(`questions.${qIndex}.options.${optIndex}.isCorrect`, isCorrect);
+      }
+    };
 
-  // Render options for a question including image upload and correct checkbox
-  const renderOptions = (qIndex: number, options: any[]) =>
-    options.map((opt: any, optIndex: number) => {
-      const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        try {
-          const imageUrl = await uploadImageToSupabase(file, `quiz-options`);
-          setValue(`questions.${qIndex}.options.${optIndex}.image`, imageUrl);
-          showToast('Image uploaded!', 'success');
-        } catch {
-          showToast('Image upload failed', 'error');
-        }
-      };
-
-      return (
-        <Stack
-          key={optIndex}
-          direction="row"
-          spacing={2}
-          alignItems="center"
-          sx={{ mb: 1 }}
-        >
-          <TextField
-            label={`Option ${optIndex + 1}`}
-            {...register(`questions.${qIndex}.options.${optIndex}.text` as const)}
-            fullWidth
-          />
-          <Button variant="outlined" component="label" size="small">
-            Upload Image
-            <input type="file" hidden accept="image/*" onChange={handleImageChange} />
-          </Button>
-          {opt.image && (
-            <Box
-              component="img"
-              src={opt.image}
-              alt={`Option ${optIndex + 1}`}
-              sx={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 1 }}
-            />
-          )}
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={watch(`questions.${qIndex}.options.${optIndex}.isCorrect`)}
-                onChange={(e) =>
-                  setValue(`questions.${qIndex}.options.${optIndex}.isCorrect`, e.target.checked)
-                }
+    return options.map((opt, optIndex) => (
+      <Stack key={optIndex} direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            questionType === 'single' ? (
+              <Radio
+                checked={opt.isCorrect}
+                onChange={() => handleOptionChange(optIndex, true)}
+                color="primary"
               />
-            }
-            label="Correct"
+            ) : (
+              <Checkbox
+                checked={opt.isCorrect}
+                onChange={(e) => handleOptionChange(optIndex, e.target.checked)}
+                color="primary"
+              />
+            )
+          }
+          label={
+            <TextField
+              fullWidth
+              variant="outlined"
+              size="small"
+              value={opt.text}
+              onChange={(e) => setValue(`questions.${qIndex}.options.${optIndex}.text`, e.target.value)}
+              sx={{ backgroundColor: 'background.paper', borderRadius: 1 }}
+            />
+          }
+          sx={{ flex: 1, alignItems: 'center' }}
+        />
+        <Button
+          variant="outlined"
+          component="label"
+          startIcon={<CloudUploadIcon />}
+          sx={{ minWidth: 120 }}
+        >
+          Image
+          <input
+            type="file"
+            hidden
+            accept="image/*"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                try {
+                  const url = await uploadImageToSupabase(file, 'options');
+                  setValue(`questions.${qIndex}.options.${optIndex}.image`, url);
+                } catch {
+                  showToast('Image upload failed', 'error');
+                }
+              }
+            }}
           />
-        </Stack>
-      );
-    });
+        </Button>
+        {opt.image && (
+          <Box
+            component="img"
+            src={opt.image}
+            alt="Option"
+            sx={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 1, border: '1px solid #eee' }}
+          />
+        )}
+      </Stack>
+    ));
+  };
+
+  if (!mounted) return null;
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
-      <Container maxWidth="md" sx={{ py: 5 }}>
-        <Paper elevation={3} sx={{ p: 4 }}>
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            alignItems="center"
-            mb={2}
-          >
-            <Typography variant="h4" fontWeight={700}>
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Paper elevation={3} sx={{ p: 4, borderRadius: 3 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
+            <Typography variant="h4" fontWeight={600} color="primary">
               Create New Quiz
             </Typography>
-            <Tooltip title="Toggle Theme">
-              <IconButton onClick={toggleMode} aria-label="toggle theme">
+            <Tooltip title="Toggle theme">
+              <IconButton onClick={toggleMode}>
                 {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
               </IconButton>
             </Tooltip>
           </Stack>
 
-          <Button
-            variant="text"
-            onClick={() => router.push('/dashboard')}
-            sx={{ mb: 2 }}
-          >
+          <Button onClick={() => router.push('/dashboard')} sx={{ mb: 3 }}>
             ← Back to Dashboard
           </Button>
 
-          <Divider sx={{ mb: 3 }} />
-
-          {/* CSV Upload Button */}
-          <Stack direction="row" alignItems="center" spacing={2} mb={3}>
-            <Button variant="outlined" component="label">
-              Upload Questions via CSV
-              <input type="file" hidden accept=".csv" onChange={handleCsvUpload} />
-            </Button>
-            <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 400 }}>
-              (Optional) Upload CSV file to auto-fill questions. Use comma-separated numbers in
-              {' '}
-              <code>correct_option</code> for multiple answers (e.g. "1,3").
+          <Box sx={{ mb: 4, p: 3, bgcolor: 'background.paper', borderRadius: 2, boxShadow: 1 }}>
+            <Typography variant="h6" gutterBottom>
+              Import Questions
             </Typography>
-          </Stack>
+            <Stack direction="row" alignItems="center" spacing={2}>
+              <Button
+                variant="contained"
+                component="label"
+                startIcon={<CloudUploadIcon />}
+                sx={{ textTransform: 'none' }}
+              >
+                Upload CSV
+                <input type="file" hidden accept=".csv" onChange={handleCsvUpload} />
+              </Button>
+              <Typography variant="body2" color="text.secondary">
+                Format: question,option1,option2,option3,option4,correct_answers,explanation,marks
+              </Typography>
+            </Stack>
+          </Box>
 
           <FormProvider {...methods}>
             <form onSubmit={handleSubmit((data) => onSubmit(data, false))}>
               <Stack spacing={3}>
                 <TextField
-  label="Quiz Title"
-  {...register('quizTitle', { required: 'Quiz Title is required' })}
-  fullWidth
-  required
-  error={!!errors.quizTitle}
-  helperText={errors.quizTitle?.message}
-/>
+                  label="Quiz Title"
+                  {...register('quizTitle')}
+                  fullWidth
+                  required
+                  error={!!errors.quizTitle}
+                  helperText={errors.quizTitle?.message}
+                  variant="outlined"
+                  sx={{ mb: 2 }}
+                />
+
+                <TextField
+                  label="Description"
+                  {...register('description')}
+                  fullWidth
+                  multiline
+                  rows={3}
+                  variant="outlined"
+                />
 
                 <Stack direction="row" spacing={2}>
                   <TextField
@@ -347,216 +453,238 @@ const handleCsvUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
                     type="number"
                     {...register('totalMarks')}
                     fullWidth
-                    error={!!errors.totalMarks}
-                    helperText={errors.totalMarks?.message}
+                    variant="outlined"
                   />
                   <TextField
-                    label="Duration (mins)"
+                    label="Duration (minutes)"
                     type="number"
                     {...register('duration')}
                     fullWidth
-                    error={!!errors.duration}
-                    helperText={errors.duration?.message}
+                    variant="outlined"
                   />
                 </Stack>
+
                 <Stack direction="row" spacing={2}>
-                  <DateTimePicker
+                  <ModernDateTimePicker
                     label="Start Date & Time"
-                    value={dayjs(watch('startDateTime'))}
-                    onChange={(val) => setValue('startDateTime', val?.toDate() || new Date())}
-                    slotProps={{ textField: { fullWidth: true } }}
+                    value={watch('startDateTime')}
+                    onChange={(date) => setValue('startDateTime', date || new Date())}
                   />
-                  <DateTimePicker
+                  <ModernDateTimePicker
                     label="End Date & Time"
-                    value={dayjs(watch('expiryDateTime'))}
-                    onChange={(val) => setValue('expiryDateTime', val?.toDate() || new Date())}
-                    slotProps={{ textField: { fullWidth: true } }}
+                    value={watch('expiryDateTime')}
+                    onChange={(date) => setValue('expiryDateTime', date || new Date())}
                   />
                 </Stack>
-                <TextField
-                  label="Max Attempts"
-                  type="number"
-                  {...register('maxAttempts')}
-                  fullWidth
-                  error={!!errors.maxAttempts}
-                  helperText={errors.maxAttempts?.message}
-                />
-                <FormControlLabel
-                  control={<Checkbox {...register('previewMode')} />}
-                  label="Enable Preview Mode"
-                />
+
                 <Stack direction="row" spacing={2}>
-                  <FormControlLabel
-                    control={<Checkbox {...register('shuffleQuestions')} />}
-                    label="Shuffle Questions"
+                  <TextField
+                    label="Max Attempts"
+                    type="number"
+                    {...register('maxAttempts')}
+                    fullWidth
+                    variant="outlined"
                   />
-                  <FormControlLabel
-                    control={<Checkbox {...register('shuffleOptions')} />}
-                    label="Shuffle Options"
+                  <TextField
+                    label="Passing Score (%)"
+                    type="number"
+                    {...register('passingScore')}
+                    fullWidth
+                    variant="outlined"
+                    inputProps={{ min: 0, max: 100 }}
                   />
                 </Stack>
-              </Stack>
 
-              <Typography variant="h6" mt={4} mb={2}>
-                Questions
-              </Typography>
+                <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
+                  <FormControlLabel control={<Checkbox {...register('shuffleQuestions')} />} label="Shuffle Questions" />
+                  <FormControlLabel control={<Checkbox {...register('shuffleOptions')} />} label="Shuffle Options" />
+                  <FormControlLabel control={<Checkbox {...register('previewMode')} />} label="Preview Mode" />
+                  <FormControlLabel control={<Checkbox {...register('showCorrectAnswers')} />} label="Show Answers" />
+                </Stack>
 
-              {questionFields.map((q, qIndex) => {
-                const options = watch(`questions.${qIndex}.options`);
-                return (
-                  <Box
-                    key={q.id}
-                    mb={3}
-                    p={2}
-                    border={1}
-                    borderColor="grey.300"
-                    borderRadius={2}
-                    role="region"
-                    aria-label={`Question ${qIndex + 1}`}
-                  >
-                    <Stack spacing={2}>
-                      {/* Question with image upload */}
-                      <Stack direction="row" spacing={2} alignItems="center" mb={1}>
-                        <TextField
-                          label="Question"
-                          {...register(`questions.${qIndex}.question`)}
-                          fullWidth
-                          required
-                          error={!!errors.questions?.[qIndex]?.question}
-                          helperText={errors.questions?.[qIndex]?.question?.message}
-                        />
-                        <Button variant="outlined" component="label" size="small">
-                          Upload Image
+                <Divider sx={{ my: 3 }} />
+
+                <Typography variant="h6" sx={{ mb: 2 }}>
+                  Questions
+                </Typography>
+
+                {questionFields.map((q, qIndex) => {
+                  const questionType = watch(`questions.${qIndex}.questionType`);
+                  const options = watch(`questions.${qIndex}.options`);
+
+                  return (
+                    <Paper
+                      key={q.id}
+                      elevation={2}
+                      sx={{ p: 3, mb: 3, borderRadius: 2, borderLeft: '4px solid', borderColor: 'primary.main' }}
+                    >
+                      <Stack spacing={2}>
+                        <Stack direction="row" spacing={2} alignItems="flex-start">
+                          <TextField
+                            label={`Question ${qIndex + 1}`}
+                            {...register(`questions.${qIndex}.question`)}
+                            fullWidth
+                            required
+                            multiline
+                            variant="outlined"
+                          />
+                          <TextField
+                            label="Marks"
+                            type="number"
+                            {...register(`questions.${qIndex}.marks`)}
+                            sx={{ width: 100 }}
+                            variant="outlined"
+                          />
+                        </Stack>
+
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Question Type</InputLabel>
+                          <Select
+                            value={questionType}
+                            label="Question Type"
+                            onChange={(e) => setValue(`questions.${qIndex}.questionType`, e.target.value as 'single' | 'multiple')}
+                            variant="outlined"
+                          >
+                            <MenuItem value="single">Single Correct Answer</MenuItem>
+                            <MenuItem value="multiple">Multiple Correct Answers</MenuItem>
+                          </Select>
+                        </FormControl>
+
+                        <Button
+                          variant="outlined"
+                          component="label"
+                          startIcon={<CloudUploadIcon />}
+                          sx={{ alignSelf: 'flex-start' }}
+                        >
+                          Upload Question Image
                           <input
                             type="file"
                             hidden
                             accept="image/*"
                             onChange={async (e) => {
                               const file = e.target.files?.[0];
-                              if (!file) return;
-                              try {
-                                const imageUrl = await uploadImageToSupabase(
-                                  file,
-                                  'quiz-questions'
-                                );
-                                setValue(`questions.${qIndex}.image`, imageUrl);
-                                showToast('Question image uploaded!', 'success');
-                              } catch {
-                                showToast('Image upload failed', 'error');
+                              if (file) {
+                                try {
+                                  const url = await uploadImageToSupabase(file, 'questions');
+                                  setValue(`questions.${qIndex}.image`, url);
+                                } catch {
+                                  showToast('Image upload failed', 'error');
+                                }
                               }
                             }}
                           />
                         </Button>
-                      </Stack>
-                      
-                      {/* Question image preview */}
-                      {watch(`questions.${qIndex}.image`) && (
-                        <Box
-                          component="img"
-                          src={watch(`questions.${qIndex}.image`)}
-                          alt={`Question ${qIndex + 1} image`}
-                          sx={{ 
-                            maxWidth: 200, 
-                            maxHeight: 200, 
-                            objectFit: 'contain', 
-                            borderRadius: 1 
-                          }}
+
+                        {watch(`questions.${qIndex}.image`) && (
+                          <Box
+                            component="img"
+                            src={watch(`questions.${qIndex}.image`)}
+                            alt="Question"
+                            sx={{ maxWidth: 200, maxHeight: 200, objectFit: 'contain', borderRadius: 1 }}
+                          />
+                        )}
+
+                        <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 1 }}>
+                          {questionType === 'single' ? 'Select one correct answer' : 'Select all correct answers'}
+                        </Typography>
+
+                        {renderOptions(qIndex, options, questionType)}
+
+                        <Button
+                          startIcon={<AddIcon />}
+                          onClick={() =>
+                            setValue(`questions.${qIndex}.options`, [...options, { text: '', image: null, isCorrect: false }])
+                          }
+                          variant="outlined"
+                          sx={{ alignSelf: 'flex-start' }}
+                        >
+                          Add Option
+                        </Button>
+
+                        <TextField
+                          label="Explanation (shown after answering)"
+                          {...register(`questions.${qIndex}.explanation`)}
+                          fullWidth
+                          multiline
+                          rows={2}
+                          variant="outlined"
                         />
-                      )}
 
-                      {/* Options */}
-                      {renderOptions(qIndex, options)}
-                      
-                      <Button
-                        onClick={() =>
-                          setValue(`questions.${qIndex}.options`, [
-                            ...options,
-                            { text: '', image: null, isCorrect: false },
-                          ])
-                        }
-                        startIcon={<AddIcon />}
-                        size="small"
-                      >
-                        Add Option
-                      </Button>
-                      
-                      <TextField
-                        label="Explanation"
-                        {...register(`questions.${qIndex}.explanation`)}
-                        fullWidth
-                        multiline
-                        rows={2}
-                        error={!!errors.questions?.[qIndex]?.explanation}
-                        helperText={errors.questions?.[qIndex]?.explanation?.message}
-                      />
-                      
-                      <Button
-                        startIcon={<DeleteIcon />}
-                        onClick={() => remove(qIndex)}
-                        color="error"
-                        size="small"
-                      >
-                        Remove Question
-                      </Button>
-                    </Stack>
-                  </Box>
-                );
-              })}
+                        <Button
+                          startIcon={<DeleteIcon />}
+                          onClick={() => remove(qIndex)}
+                          color="error"
+                          variant="outlined"
+                          sx={{ alignSelf: 'flex-end' }}
+                        >
+                          Remove Question
+                        </Button>
+                      </Stack>
+                    </Paper>
+                  );
+                })}
 
-              <Button
-                startIcon={<AddIcon />}
-                onClick={() =>
-                  append({
-                    question: '',
-                    image: null,
-                    explanation: '',
-                    options: [
-                      { text: '', image: null, isCorrect: false },
-                      { text: '', image: null, isCorrect: false },
-                    ],
-                  })
-                }
-                sx={{ mt: 2 }}
-              >
-                Add Question
-              </Button>
-
-              <Stack
-                direction="row"
-                spacing={2}
-                mt={4}
-                justifyContent="flex-end"
-              >
                 <Button
+                  startIcon={<AddIcon />}
+                  onClick={() =>
+                    append({
+                      question: '',
+                      questionType: 'single',
+                      image: null,
+                      explanation: '',
+                      marks: '1',
+                      options: [
+                        { text: '', image: null, isCorrect: false },
+                        { text: '', image: null, isCorrect: false },
+                      ],
+                    })
+                  }
                   variant="outlined"
-                  onClick={handleSubmit((data) => onSubmit(data, true))}
-                  disabled={isSubmitting}
+                  sx={{ mt: 2 }}
                 >
-                  {isSubmitting ? <CircularProgress size={24} /> : 'Save as Draft'}
+                  Add Question
                 </Button>
-                <Button type="submit" variant="contained" disabled={isSubmitting}>
-                  {isSubmitting ? <CircularProgress size={24} /> : 'Publish Quiz'}
-                </Button>
+
+                <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 4 }}>
+                  <Button
+                    variant="outlined"
+                    onClick={handleSubmit((data) => onSubmit(data, true))}
+                    disabled={isSubmitting}
+                    sx={{ px: 4 }}
+                  >
+                    {isSubmitting ? <CircularProgress size={24} /> : 'Save Draft'}
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    disabled={isSubmitting}
+                    sx={{ px: 4 }}
+                  >
+                    {isSubmitting ? <CircularProgress size={24} /> : 'Publish Quiz'}
+                  </Button>
+                </Stack>
               </Stack>
             </form>
           </FormProvider>
         </Paper>
 
-        {/* Success Dialog */}
         <Dialog open={openDialog} onClose={() => setOpenDialog(false)}>
           <DialogTitle>Quiz Created Successfully!</DialogTitle>
           <DialogContent>
             <Typography>Share this access code with your students:</Typography>
-            <Typography variant="h5" sx={{ mt: 2 }} color="primary" fontWeight="bold">
+            <Typography variant="h4" sx={{ mt: 2, mb: 1 }} color="primary" fontWeight="bold">
               {accessCode}
+            </Typography>
+            <Typography variant="body2">
+              You can manage this quiz from your dashboard.
             </Typography>
           </DialogContent>
           <DialogActions>
+            <Button onClick={() => router.push('/dashboard')}>Go to Dashboard</Button>
             <Button onClick={() => setOpenDialog(false)}>Close</Button>
           </DialogActions>
         </Dialog>
 
-        {/* Toast Notifications */}
         <Snackbar
           open={toast.open}
           autoHideDuration={3000}
@@ -565,8 +693,8 @@ const handleCsvUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
         >
           <Alert
             severity={toast.type}
-            sx={{ width: '100%' }}
             onClose={() => setToast({ ...toast, open: false })}
+            sx={{ width: '100%' }}
           >
             {toast.msg}
           </Alert>

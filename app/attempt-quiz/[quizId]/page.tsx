@@ -21,57 +21,69 @@ import {
   Paper,
   Stack,
   Typography,
+  Alert,
+  Grid,
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import { supabase } from '@/utils/supabaseClient'
 import { useUser } from '@clerk/nextjs'
-import ErrorPopup from '@/components/ErrorPopup'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 
-interface Option {
+interface QuizOption {
   text: string
-  isCorrect: boolean
+  is_correct: boolean
 }
+
 interface Question {
   id: number
   question_text: string
-  options: Option[]
-}
-interface Quiz {
-  id: number
-  quiz_title?: string
-  quiz_name?: string
-  duration: number
-  max_attempts: number
+  options: QuizOption[]
+  correct_answers: number[]
+  marks: number
+  explanation?: string
+  image_url?: string
 }
 
-const QuestionButton = ({ 
-  idx, 
-  current, 
-  answers, 
-  questions, 
-  setCurrent, 
-  submitted 
+interface Quiz {
+  id: number
+  quiz_title: string
+  duration: number
+  max_attempts: number
+  passing_score: number
+  show_correct_answers: boolean
+}
+
+const QuestionButton = ({
+  idx,
+  current,
+  answers,
+  questionId,
+  setCurrent,
+  submitted
 }: {
   idx: number
   current: number
-  answers: Record<number, string[]>
-  questions: Question[]
+  answers: Record<number, number[]>
+  questionId: number
   setCurrent: (index: number) => void
   submitted: boolean
 }) => {
-  const done = !!answers[questions[idx].id]
+  const done = !!answers[questionId]
   return (
     <Button
       size="small"
       variant={idx === current ? 'contained' : done ? 'outlined' : 'text'}
       color={done ? 'success' : 'primary'}
       onClick={() => setCurrent(idx)}
-      sx={{ 
+      sx={{
         minWidth: 32,
         minHeight: 32,
-        borderRadius: '4px',
+        borderRadius: '8px',
         fontSize: '0.75rem',
-        padding: 0
+        padding: 0,
+        '&:disabled': {
+          opacity: 0.5
+        }
       }}
       disabled={submitted}
     >
@@ -86,17 +98,9 @@ export default function AttemptQuizPage() {
   const router = useRouter()
   const { user } = useUser()
 
-  if (!quizId) {
-    return (
-      <Container sx={{ mt: 4 }}>
-        <Typography color="error">Invalid quiz URL – no quizId provided.</Typography>
-      </Container>
-    )
-  }
-
   const [quiz, setQuiz] = useState<Quiz | null>(null)
   const [questions, setQuestions] = useState<Question[]>([])
-  const [answers, setAnswers] = useState<Record<number, string[]>>({})
+  const [answers, setAnswers] = useState<Record<number, number[]>>({})
   const [current, setCurrent] = useState(0)
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [totalTime, setTotalTime] = useState(0)
@@ -104,81 +108,108 @@ export default function AttemptQuizPage() {
   const [submitted, setSubmitted] = useState(false)
   const [attemptCount, setAttemptCount] = useState(0)
   const [attemptsLoading, setAttemptsLoading] = useState(true)
-  const [errorPopup, setErrorPopup] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [timeUpDialogOpen, setTimeUpDialogOpen] = useState(false)
   const [autoSubmitting, setAutoSubmitting] = useState(false)
-
-  // Anti-cheat measures
-  useEffect(() => {
-    const killKeys = (e: KeyboardEvent) => {
-      const combo = `${e.ctrlKey ? 'Control+' : ''}${e.metaKey ? 'Meta+' : ''}${e.shiftKey ? 'Shift+' : ''}${e.key}`
-      const blocked = ['F12', 'Control+Shift+I', 'Control+Shift+J', 'Control+U', 'Control+C', 'Meta+C']
-      if (blocked.includes(combo) || e.key === 'F12') e.preventDefault()
-    }
-    const killMenu = (e: MouseEvent) => e.preventDefault()
-    document.addEventListener('keydown', killKeys)
-    document.addEventListener('contextmenu', killMenu)
-
-    const prev = document.body.style.userSelect
-    document.body.style.userSelect = 'none'
-
-    return () => {
-      document.removeEventListener('keydown', killKeys)
-      document.removeEventListener('contextmenu', killMenu)
-      document.body.style.userSelect = prev
-    }
-  }, [])
+  const [quizNotFound, setQuizNotFound] = useState(false)
 
   // Fetch quiz data
   useEffect(() => {
     const fetchData = async () => {
+      if (!quizId) {
+        setQuizNotFound(true)
+        setLoading(false)
+        return
+      }
+
       try {
+        // 1. Fetch quiz
         const { data: quizData, error: quizError } = await supabase
           .from('quizzes')
           .select('*')
           .eq('id', quizId)
           .single()
 
-        if (quizError) throw quizError
+        if (quizError || !quizData) {
+          setQuizNotFound(true)
+          throw quizError || new Error('Quiz not found')
+        }
 
+        // 2. Fetch questions
         const { data: questionData, error: questionError } = await supabase
           .from('questions')
-          .select('*')
+          .select(`
+            id,
+            question_text,
+            options,
+            correct_answers,
+            marks,
+            explanation,
+            image_url
+          `)
           .eq('quiz_id', quizId)
+          .order('id', { ascending: true })
 
         if (questionError) throw questionError
+        if (!questionData || questionData.length === 0) {
+          throw new Error('No questions found for this quiz')
+        }
 
-        const parsed: Question[] = (questionData ?? []).map((q: any) => {
-          const correct = JSON.parse(q.correct_answers || '[]').map((s: string) => s.trim().toLowerCase())
-          const raw = JSON.parse(q.options || '[]')
-          const opts =
-            typeof raw[0] === 'string'
-              ? raw.map((t: string) => ({ text: t.trim(), isCorrect: correct.includes(t.trim().toLowerCase()) }))
-              : raw.map((o: any) => ({ text: o.text.trim(), isCorrect: correct.includes(o.text.trim().toLowerCase()) }))
-          return { id: q.id, question_text: q.question_text, options: opts }
+        // 3. Transform questions data
+        const parsedQuestions: Question[] = questionData.map((q: any) => {
+          // Handle cases where options might be malformed
+          let options: any[] = []
+          try {
+            options = Array.isArray(q.options) ? q.options : []
+          } catch (e) {
+            console.error('Error parsing options:', e)
+            options = []
+          }
+
+          // Handle cases where correct_answers might be malformed
+          let correct_answers: number[] = []
+          try {
+            correct_answers = Array.isArray(q.correct_answers) ? q.correct_answers : []
+          } catch (e) {
+            console.error('Error parsing correct_answers:', e)
+            correct_answers = []
+          }
+
+          return {
+            id: q.id,
+            question_text: q.question_text || 'No question text',
+            options: options.map((opt: any, index: number) => ({
+              text: opt?.text || `Option ${index + 1}`,
+              is_correct: correct_answers.includes(index)
+            })),
+            correct_answers,
+            marks: Number(q.marks) || 1,
+            explanation: q.explanation,
+            image_url: q.image_url
+          }
         })
 
         setQuiz(quizData)
-        setQuestions(parsed)
-
-        const secs = (quizData?.duration ?? 30) * 60
-        setTotalTime(secs)
-        setTimeLeft(secs)
-      } catch (error) {
-        console.error('Error fetching quiz data:', error)
-        setErrorPopup('Failed to load quiz data. Please try again.')
+        setQuestions(parsedQuestions)
+        setTotalTime((quizData.duration || 30) * 60)
+        setTimeLeft((quizData.duration || 30) * 60)
+      } catch (err) {
+        console.error('Quiz loading error:', err)
+        setError(err instanceof Error ? err.message : 'Failed to load quiz')
+        setQuizNotFound(true)
       } finally {
         setLoading(false)
       }
     }
+
     fetchData()
   }, [quizId])
 
   // Fetch attempt count
   useEffect(() => {
     const fetchAttempts = async () => {
-      if (!user) return
+      if (!user || !quizId) return
       try {
         const { data, error } = await supabase
           .from('attempts')
@@ -188,9 +219,9 @@ export default function AttemptQuizPage() {
 
         if (error) throw error
         setAttemptCount(data?.length ?? 0)
-      } catch (error) {
-        console.error('Error fetching attempts:', error)
-        setErrorPopup('Failed to load attempt history')
+      } catch (err) {
+        console.error('Attempts loading error:', err)
+        setError('Failed to load attempt history')
       } finally {
         setAttemptsLoading(false)
       }
@@ -198,24 +229,17 @@ export default function AttemptQuizPage() {
     fetchAttempts()
   }, [user, quizId])
 
-  // Timer countdown
+  // Timer logic
   useEffect(() => {
     if (submitted || timeLeft === null || timeLeft <= 0) return
 
     const timerId = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev === null || prev <= 0) {
-          clearInterval(timerId)
-          return 0
-        }
-        return prev - 1
-      })
+      setTimeLeft(prev => (prev && prev > 0 ? prev - 1 : 0))
     }, 1000)
 
     return () => clearInterval(timerId)
   }, [submitted, timeLeft])
 
-  // Handle timeout when time reaches 0
   useEffect(() => {
     if (timeLeft === 0 && !submitted) {
       handleTimeout()
@@ -229,40 +253,39 @@ export default function AttemptQuizPage() {
 
   const progress = useMemo(() => {
     if (timeLeft === null || totalTime === 0) return 0
-    const safeLeft = Math.max(0, timeLeft)
-    return ((totalTime - safeLeft) / totalTime) * 100
+    return ((totalTime - Math.max(0, timeLeft)) / totalTime) * 100
   }, [timeLeft, totalTime])
 
-  const answeredCount = Object.keys(answers).length
-  const q = questions[current]
-
-  const handleCheckboxChange = useCallback((qid: number, opt: string) => {
-    setAnswers((prev) => {
+  const handleCheckboxChange = useCallback((qid: number, optIndex: number) => {
+    setAnswers(prev => {
       const prevAns = prev[qid] || []
-      return { 
-        ...prev, 
-        [qid]: prevAns.includes(opt) 
-          ? prevAns.filter((t) => t !== opt) 
-          : [...prevAns, opt] 
+      const question = questions.find(q => q.id === qid)
+      const isSingle = question?.correct_answers.length === 1
+      
+      return {
+        ...prev,
+        [qid]: isSingle 
+          ? [optIndex]
+          : prevAns.includes(optIndex)
+            ? prevAns.filter(i => i !== optIndex)
+            : [...prevAns, optIndex]
       }
     })
-  }, [])
+  }, [questions])
 
   const buildPayload = () => {
     let score = 0
-    const userAns: Record<number, string[]> = {}
-    const correctMap: Record<number, string[]> = {}
+    const userAns: Record<number, number[]> = {}
+    const correctMap: Record<number, number[]> = {}
 
-    questions.forEach((qq) => {
-      const ua = answers[qq.id]?.map((s) => s.trim().toLowerCase()) ?? []
-      userAns[qq.id] = ua
-      const correct = qq.options
-        .filter((o) => o.isCorrect)
-        .map((o) => o.text.trim().toLowerCase())
-      correctMap[qq.id] = correct
-      
-      if (ua.length === correct.length && ua.every((a) => correct.includes(a))) {
-        score += 1
+    questions.forEach(q => {
+      const ua = answers[q.id] || []
+      userAns[q.id] = ua
+      correctMap[q.id] = q.correct_answers
+
+      if (ua.length === q.correct_answers.length && 
+          ua.every(a => q.correct_answers.includes(a))) {
+        score += q.marks
       }
     })
 
@@ -270,342 +293,285 @@ export default function AttemptQuizPage() {
   }
 
   const submitToDB = async (payload: { userAns: any; correctMap: any; score: number }) => {
-    if (!user) {
-      setErrorPopup('You must be logged in to submit');
-      return { data: null, error: new Error('User not logged in') };
+    if (!user || !quizId) {
+      throw new Error('You must be logged in to submit')
     }
 
     try {
-      console.log('Submitting payload:', payload);
-      
       const { data, error } = await supabase
         .from('attempts')
-        .insert([{
+        .insert({
           quiz_id: quizId,
           user_id: user.id,
-          user_name: user.fullName || 'Unknown User',
-          answers: JSON.stringify(payload.userAns),
-          correct_answers: JSON.stringify(payload.correctMap),
+          user_name: user.fullName || 'Anonymous',
+          answers: payload.userAns,
+          correct_answers: payload.correctMap,
           submitted_at: new Date().toISOString(),
           score: payload.score,
-        }])
-        .select('id')
-        .single();
+          total_marks: questions.reduce((sum, q) => sum + q.marks, 0),
+        })
+        .select()
+        .single()
 
       if (error) {
-        console.error('Supabase error details:', error);
-        throw error;
+        console.error('Supabase error details:', error)
+        throw new Error(error.message || 'Submission failed')
       }
 
-      console.log('Submission successful:', data);
-      return { data, error: null };
-    } catch (error) {
-      console.error('Full submission error:', error);
-      return { 
-        data: null, 
-        error: error instanceof Error ? error : new Error('Submission failed') 
-      };
+      if (!data) {
+        throw new Error('No data returned from submission')
+      }
+
+      return data
+    } catch (err) {
+      console.error('Full submission error:', err)
+      throw new Error(err instanceof Error ? err.message : 'Submission failed')
     }
-  };
+  }
 
   const handleSubmitClick = () => setConfirmDialogOpen(true)
 
   const confirmSubmission = async () => {
-    setConfirmDialogOpen(false);
-    
-    if (!user) {
-      setErrorPopup('You must be logged in to submit');
-      return;
-    }
-
-    if (quiz && attemptCount >= quiz.max_attempts) {
-      setErrorPopup('Maximum attempts reached');
-      return;
-    }
-
-    setSubmitted(true);
-    setAutoSubmitting(true);
+    setConfirmDialogOpen(false)
+    setSubmitted(true)
+    setAutoSubmitting(true)
 
     try {
-      const payload = buildPayload();
-      console.log('Attempting submission with payload:', payload);
-
-      const { data, error } = await submitToDB(payload);
-
-      if (error) {
-        console.error('Submission failed with error:', error);
-        setErrorPopup(`Submission failed: ${error.message}`);
-        setSubmitted(false);
-        return;
+      if (!user) throw new Error('Authentication required')
+      if (quiz && attemptCount >= quiz.max_attempts) {
+        throw new Error(`Maximum attempts reached (${quiz.max_attempts})`)
       }
 
-      if (!data) {
-        console.error('Submission failed - no data returned');
-        setErrorPopup('Submission failed - please try again');
-        setSubmitted(false);
-        return;
-      }
+      const payload = buildPayload()
+      const result = await submitToDB(payload)
 
-      console.log('Submission successful, redirecting to result:', data.id);
-      router.push(`/result/${data.id}`);
-    } catch (error) {
-      console.error('Unexpected submission error:', error);
-      setErrorPopup('An unexpected error occurred during submission');
-      setSubmitted(false);
+      if (!result) throw new Error('Submission failed - no result returned')
+      router.push(`/result/${result.id}`)
+    } catch (err) {
+      console.error('Submission error:', err)
+      setError(err instanceof Error ? err.message : 'Submission failed')
+      setSubmitted(false)
     } finally {
-      setAutoSubmitting(false);
+      setAutoSubmitting(false)
     }
-  };
+  }
 
   const handleTimeout = async () => {
-    setTimeUpDialogOpen(true);
-    setSubmitted(true);
-    setAutoSubmitting(true);
+    setTimeUpDialogOpen(true)
+    setSubmitted(true)
+    setAutoSubmitting(true)
 
     try {
-      const payload = buildPayload();
-      console.log('Auto-submitting with payload:', payload);
+      const payload = buildPayload()
+      const result = await submitToDB(payload)
 
-      const { data, error } = await submitToDB(payload);
-
-      if (error) {
-        console.error('Auto-submission failed:', error);
-        setErrorPopup('Auto-submission failed. Please contact support.');
-        return;
-      }
-
-      if (!data) {
-        console.error('Auto-submission failed - no data returned');
-        setErrorPopup('Auto-submission failed - please contact support.');
-        return;
-      }
-
-      console.log('Auto-submission successful, redirecting to result:', data.id);
-      setTimeout(() => router.push(`/result/${data.id}`), 2000);
-    } catch (error) {
-      console.error('Unexpected auto-submission error:', error);
-      setErrorPopup('An error occurred during auto-submission');
+      if (!result) throw new Error('Auto-submission failed - no result returned')
+      setTimeout(() => router.push(`/result/${result.id}`), 2000)
+    } catch (err) {
+      console.error('Auto-submission error:', err)
+      setError('Auto-submission failed. Please contact support.')
     } finally {
-      setAutoSubmitting(false);
+      setAutoSubmitting(false)
     }
-  };
+  }
 
   if (loading || attemptsLoading) {
     return (
-      <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
-        <CircularProgress />
+      <Box sx={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        height: '100vh' 
+      }}>
+        <CircularProgress size={60} />
+        <Typography variant="h6" sx={{ mt: 3 }}>
+          Loading quiz...
+        </Typography>
       </Box>
     )
   }
 
-  if (!quiz) {
+  if (quizNotFound || !quiz) {
     return (
       <Container sx={{ mt: 4 }}>
-        <Typography variant="h6" color="error">
-          Quiz not found.
-        </Typography>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error || 'Quiz not found or you don\'t have permission to access it.'}
+        </Alert>
+        <Button 
+          variant="contained" 
+          onClick={() => router.push('/')}
+          startIcon={<ArrowBackIcon />}
+        >
+          Return to Dashboard
+        </Button>
       </Container>
     )
   }
 
   return (
-    <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
-      <Box sx={{ minHeight: '100vh', background: '#f9fafb' }}>
-        <Container maxWidth="lg" sx={{ py: 4 }}>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
+      <Box sx={{ 
+        minHeight: '100vh', 
+        bgcolor: 'background.default', 
+        py: 4 
+      }}>
+        <Container maxWidth="lg">
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={3}>
-            {/* Left Navigator */}
-            <Paper
-              elevation={1}
-              sx={{
-                p: 2,
-                borderRadius: 2,
-                bgcolor: 'background.paper',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-                minWidth: 180,
-                height: 'fit-content'
-              }}
-            >
-              <Typography variant="subtitle2" fontWeight={600} textAlign="center" mb={1}>
-                Quiz navigation
+            {/* Navigation Panel */}
+            <Paper sx={{ 
+              p: 3, 
+              borderRadius: 3,
+              bgcolor: 'background.paper',
+              position: 'sticky',
+              top: 20,
+              alignSelf: 'flex-start'
+            }}>
+              <Typography variant="subtitle1" fontWeight={600} mb={2}>
+                Questions
+              </Typography>
+              
+              <Grid container spacing={1} sx={{ mb: 2 }}>
+                {questions.map((q, idx) => (
+                  <Grid item xs={4} sm={3} key={q.id}>
+                    <QuestionButton
+                      idx={idx}
+                      current={current}
+                      answers={answers}
+                      questionId={q.id}
+                      setCurrent={setCurrent}
+                      submitted={submitted}
+                    />
+                  </Grid>
+                ))}
+              </Grid>
+
+              <Typography variant="body2" color="text.secondary" textAlign="center" mb={2}>
+                Answered: {Object.keys(answers).length}/{questions.length}
               </Typography>
 
-              {/* First row - exactly 7 buttons */}
-              <Box sx={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(7, 1fr)',
-                gap: '4px',
-                justifyContent: 'center',
-                mb: 1
-              }}>
-                {questions.slice(0, 7).map((_, idx) => (
-                  <QuestionButton 
-                    key={idx}
-                    idx={idx}
-                    current={current}
-                    answers={answers}
-                    questions={questions}
-                    setCurrent={setCurrent}
-                    submitted={submitted}
-                  />
-                ))}
-              </Box>
-
-              {/* Second row - exactly 7 buttons */}
-              {questions.length > 7 && (
-                <Box sx={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(7, 1fr)',
-                  gap: '4px',
-                  justifyContent: 'center',
-                  mb: 1
-                }}>
-                  {questions.slice(7, 14).map((_, idx) => (
-                    <QuestionButton 
-                      key={idx + 7}
-                      idx={idx + 7}
-                      current={current}
-                      answers={answers}
-                      questions={questions}
-                      setCurrent={setCurrent}
-                      submitted={submitted}
-                    />
-                  ))}
-                </Box>
-              )}
-
-              {/* Third row - remaining questions */}
-              {questions.length > 14 && (
-                <Box sx={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(7, 1fr)',
-                  gap: '4px',
-                  justifyContent: 'center'
-                }}>
-                  {questions.slice(14, 20).map((_, idx) => (
-                    <QuestionButton 
-                      key={idx + 14}
-                      idx={idx + 14}
-                      current={current}
-                      answers={answers}
-                      questions={questions}
-                      setCurrent={setCurrent}
-                      submitted={submitted}
-                    />
-                  ))}
-                </Box>
-              )}
-
-              {/* Finish attempt button */}
               <Button
                 fullWidth
                 variant="contained"
-                color="primary"
                 onClick={handleSubmitClick}
                 disabled={submitted || timeLeft === 0}
-                sx={{ 
-                  mt: 2,
-                  textTransform: 'none',
-                  fontSize: '0.875rem',
-                  py: 1,
-                  fontWeight: 500
-                }}
+                sx={{ mb: 1 }}
               >
-                Finish attempt ...
+                Submit Quiz
               </Button>
+
+              {quiz.max_attempts > 0 && (
+                <Typography variant="caption" color="text.secondary" textAlign="center">
+                  Attempts: {attemptCount}/{quiz.max_attempts}
+                </Typography>
+              )}
             </Paper>
 
-            {/* Right Main Quiz */}
+            {/* Main Content */}
             <Box flex={1}>
               <Stack spacing={3}>
-                {/* Header */}
-                <Box display="flex" justifyContent="space-between" alignItems="center">
-                  <Typography variant="h5" fontWeight={700}>
-                    {quiz.quiz_title ?? quiz.quiz_name ?? 'Untitled Quiz'}
-                  </Typography>
-                  <Typography
-                    variant="h6"
-                    fontWeight={700}
-                    color={timeLeft !== null && timeLeft <= 60 ? 'error.main' : 'primary.main'}
-                  >
-                    ⏳ {formatTime(timeLeft ?? 0)}
-                  </Typography>
-                </Box>
+                {/* Quiz Header */}
+                <Paper sx={{ p: 3, borderRadius: 3 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
+                    <Typography variant="h5" fontWeight={700}>
+                      {quiz.quiz_title}
+                    </Typography>
+                    <Typography variant="h6" color={timeLeft && timeLeft <= 60 ? 'error.main' : 'primary.main'}>
+                      Time: {formatTime(timeLeft || 0)}
+                    </Typography>
+                  </Stack>
 
-                {/* Progress Bar */}
-                <LinearProgress 
-                  variant="determinate" 
-                  value={progress} 
-                  sx={{ 
-                    height: 8, 
-                    borderRadius: 5,
-                    backgroundColor: '#e0e0e0',
-                    '& .MuiLinearProgress-bar': {
-                      backgroundColor: timeLeft !== null && timeLeft <= 60 ? 'error.main' : 'primary.main'
-                    }
-                  }} 
-                />
-
-                {/* Status */}
-                <Box display="flex" justifyContent="space-between">
-                  <Typography variant="body2">
-                    Question {current + 1} of {questions.length}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Answered: {answeredCount}/{questions.length}
-                  </Typography>
-                </Box>
-
-                {/* Question Card */}
-                <motion.div
-                  key={q.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <Card
-                    sx={{
-                      borderRadius: 3,
-                      boxShadow: 4,
-                      background: 'linear-gradient(135deg, #ffffff 0%, #f0f4ff 100%)',
+                  <LinearProgress
+                    variant="determinate"
+                    value={progress}
+                    sx={{ 
+                      height: 8, 
+                      mt: 2,
+                      borderRadius: 4,
+                      '& .MuiLinearProgress-bar': {
+                        bgcolor: timeLeft && timeLeft <= 60 ? 'error.main' : 'primary.main'
+                      }
                     }}
-                  >
-                    <CardContent>
-                      <Typography variant="subtitle1" fontWeight={600} mb={1}>
-                        Q{current + 1}. {q.question_text}
-                      </Typography>
-                      <FormGroup>
-                        {q.options.map((opt, i) => (
-                          <FormControlLabel
-                            key={i}
-                            control={
-                              <Checkbox
-                                checked={answers[q.id]?.includes(opt.text) || false}
-                                onChange={() => handleCheckboxChange(q.id, opt.text)}
-                                disabled={submitted}
-                              />
-                            }
-                            label={opt.text}
-                            sx={{ alignItems: 'flex-start', mb: 0.5 }}
-                          />
-                        ))}
-                      </FormGroup>
-                    </CardContent>
-                  </Card>
-                </motion.div>
+                  />
+                </Paper>
 
-                {/* Nav Buttons */}
+                {/* Current Question */}
+                {questions[current] && (
+                  <motion.div
+                    key={questions[current].id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Card sx={{ borderRadius: 3 }}>
+                      <CardContent>
+                        <Typography variant="h6" fontWeight={600} mb={3}>
+                          Q{current + 1}. {questions[current].question_text}
+                        </Typography>
+
+                        {questions[current].image_url && (
+                          <Box 
+                            component="img" 
+                            src={questions[current].image_url!} 
+                            alt="Question" 
+                            sx={{ 
+                              maxWidth: '100%', 
+                              maxHeight: 300, 
+                              mb: 3,
+                              borderRadius: 2
+                            }} 
+                          />
+                        )}
+
+                        <FormGroup>
+                          {questions[current].options.map((opt, i) => (
+                            <FormControlLabel
+                              key={i}
+                              control={
+                                <Checkbox
+                                  checked={answers[questions[current].id]?.includes(i) || false}
+                                  onChange={() => handleCheckboxChange(questions[current].id, i)}
+                                  disabled={submitted}
+                                />
+                              }
+                              label={
+                                <Typography>
+                                  {opt.text}
+                                  {submitted && questions[current].correct_answers.includes(i) && (
+                                    <Box component="span" sx={{ color: 'success.main', ml: 1 }}>✓</Box>
+                                  )}
+                                </Typography>
+                              }
+                              sx={{
+                                p: 1,
+                                borderRadius: 1,
+                                bgcolor: submitted && questions[current].correct_answers.includes(i) 
+                                  ? 'success.light' 
+                                  : 'transparent',
+                                mb: 1
+                              }}
+                            />
+                          ))}
+                        </FormGroup>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )}
+
+                {/* Navigation Buttons */}
                 <Box display="flex" justifyContent="space-between">
                   <Button
                     variant="outlined"
-                    onClick={() => setCurrent((c) => Math.max(0, c - 1))}
-                    disabled={current === 0 || submitted}
+                    onClick={() => setCurrent(c => Math.max(0, c - 1))}
+                    disabled={current === 0}
                   >
-                    Back
+                    Previous
                   </Button>
                   {current < questions.length - 1 ? (
-                    <Button variant="contained" onClick={() => setCurrent((c) => c + 1)} disabled={submitted}>
+                    <Button
+                      variant="contained"
+                      onClick={() => setCurrent(c => c + 1)}
+                    >
                       Next
                     </Button>
                   ) : (
@@ -613,9 +579,9 @@ export default function AttemptQuizPage() {
                       variant="contained"
                       color="primary"
                       onClick={handleSubmitClick}
-                      disabled={submitted || timeLeft === 0}
+                      disabled={submitted}
                     >
-                      {submitted ? 'Submitted' : 'Submit'}
+                      Submit Quiz
                     </Button>
                   )}
                 </Box>
@@ -624,18 +590,17 @@ export default function AttemptQuizPage() {
           </Stack>
         </Container>
 
-        {/* Dialogs & Error Popup */}
+        {/* Dialogs */}
         <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
-          <DialogTitle>Submit Quiz</DialogTitle>
+          <DialogTitle>Confirm Submission</DialogTitle>
           <DialogContent>
             <DialogContentText>
-              You answered {answeredCount} / {questions.length} questions. Submit now?
+              You've answered {Object.keys(answers).length} out of {questions.length} questions.
+              Submit now?
             </DialogContentText>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setConfirmDialogOpen(false)} color="secondary">
-              Cancel
-            </Button>
+            <Button onClick={() => setConfirmDialogOpen(false)}>Cancel</Button>
             <Button onClick={confirmSubmission} variant="contained">
               Submit
             </Button>
@@ -643,20 +608,25 @@ export default function AttemptQuizPage() {
         </Dialog>
 
         <Dialog open={timeUpDialogOpen}>
-          <DialogTitle>⏰ Time's Up</DialogTitle>
+          <DialogTitle>Time's Up!</DialogTitle>
           <DialogContent>
             <DialogContentText>
-              The quiz time has ended. Your answers are being auto-submitted...
+              Your quiz is being automatically submitted...
             </DialogContentText>
-            {autoSubmitting && (
-              <Box mt={2} display="flex" justifyContent="center">
-                <CircularProgress size={32} />
-              </Box>
-            )}
+            {autoSubmitting && <CircularProgress sx={{ mt: 2 }} />}
           </DialogContent>
         </Dialog>
 
-        {errorPopup && <ErrorPopup message={errorPopup} onClose={() => setErrorPopup(null)} />}
+        {/* Error Alert */}
+        {error && (
+          <Alert 
+            severity="error" 
+            onClose={() => setError(null)}
+            sx={{ position: 'fixed', bottom: 20, right: 20, minWidth: 300 }}
+          >
+            {error}
+          </Alert>
+        )}
       </Box>
     </motion.div>
   )
