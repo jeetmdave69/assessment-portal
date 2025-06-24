@@ -26,13 +26,18 @@ import {
   TextField,
   Tooltip,
   Typography,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Chip,
+  LinearProgress,
 } from '@mui/material';
-import { useForm, FormProvider, useFieldArray } from 'react-hook-form';
+import { useForm, FormProvider, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useUser } from '@clerk/nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { quizSchema, QuizFormValues } from '@/schemas/quizSchema';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
@@ -43,9 +48,14 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import ImageIcon from '@mui/icons-material/Image';
 import dayjs from 'dayjs';
 import Papa from 'papaparse';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import Slide from '@mui/material/Slide';
+import React from 'react';
 
 interface QuizOption {
   text: string;
@@ -127,6 +137,13 @@ export default function CreateQuizPage() {
     msg: '',
     type: 'success',
   });
+  const [uploadingImageIndex, setUploadingImageIndex] = useState<{q: number, o: number} | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [restoredDraft, setRestoredDraft] = useState(false);
+  const autoSaveKey = 'createQuizDraft';
+  const autoSaveTimer = useRef<NodeJS.Timeout | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null });
+  const [expandedIndex, setExpandedIndex] = useState(0);
 
   const router = useRouter();
 
@@ -162,9 +179,51 @@ export default function CreateQuizPage() {
   });
 
   const { control, register, handleSubmit, setValue, watch, reset, formState: { errors } } = methods;
-  const { fields: questionFields, append, remove } = useFieldArray({ control, name: 'questions' });
+  const { fields: questionFields, append, remove, move } = useFieldArray({ control, name: 'questions' });
+  const quizTitle = useWatch({ control, name: 'quizTitle' });
+
+  // Debounced auto-save
+  const lastSaved = useRef<string>('');
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(() => {
+      const values = methods.getValues();
+      const serialized = JSON.stringify(values);
+      if (serialized !== lastSaved.current) {
+        localStorage.setItem(autoSaveKey, serialized);
+        lastSaved.current = serialized;
+      }
+    }, 15000); // 15s
+    return () => clearInterval(interval);
+  }, [mounted]);
 
   useEffect(() => setMounted(true), []);
+
+  // Auto-save draft to localStorage every 5 seconds
+  useEffect(() => {
+    if (!mounted) return;
+    autoSaveTimer.current = setInterval(() => {
+      const values = methods.getValues();
+      localStorage.setItem(autoSaveKey, JSON.stringify(values));
+    }, 5000);
+    return () => {
+      if (autoSaveTimer.current) clearInterval(autoSaveTimer.current);
+    };
+  }, [mounted]);
+
+  // Restore draft on mount
+  useEffect(() => {
+    if (!mounted) return;
+    const draft = localStorage.getItem(autoSaveKey);
+    if (draft) {
+      try {
+        reset(JSON.parse(draft));
+        setRestoredDraft(true);
+      } catch (error) {
+        console.error('Error restoring draft:', error);
+      }
+    }
+  }, [reset]);
 
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToast({ open: true, msg, type });
@@ -247,8 +306,18 @@ export default function CreateQuizPage() {
         .select('id, access_code')
         .single();
 
-      if (quizError) throw quizError;
-      if (!quiz) throw new Error('Failed to create quiz');
+      if (quizError) {
+        console.error('Quiz insert error:', quizError, JSON.stringify(quizError));
+        showToast(quizError.message || JSON.stringify(quizError), 'error');
+        setIsSubmitting(false);
+        return;
+      }
+      if (!quiz) {
+        console.error('Quiz insert returned no data');
+        showToast('Quiz insert returned no data', 'error');
+        setIsSubmitting(false);
+        return;
+      }
 
       // 2. Process all questions
       for (const q of data.questions) {
@@ -289,7 +358,12 @@ export default function CreateQuizPage() {
             matching_pairs: null
           });
 
-        if (questionError) throw questionError;
+        if (questionError) {
+          console.error('Question insert error:', questionError, JSON.stringify(questionError));
+          showToast(questionError.message || JSON.stringify(questionError), 'error');
+          setIsSubmitting(false);
+          return;
+        }
       }
 
       reset();
@@ -299,95 +373,221 @@ export default function CreateQuizPage() {
       }
       showToast(`Quiz ${isDraft ? 'saved as draft' : 'published'}!`, 'success');
     } catch (err: any) {
-      console.error('Quiz submission error:', err);
-      showToast(err.message || 'Error saving quiz', 'error');
+      console.error('Quiz submission error:', err, JSON.stringify(err));
+      showToast(err?.message || JSON.stringify(err) || 'Error saving quiz', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const renderOptions = (qIndex: number, options: QuizOption[], questionType: 'single' | 'multiple') => {
-    const handleOptionChange = (optIndex: number, isCorrect: boolean) => {
-      if (questionType === 'single') {
-        options.forEach((_, idx) => {
-          setValue(`questions.${qIndex}.options.${idx}.isCorrect`, idx === optIndex);
-        });
-      } else {
-        setValue(`questions.${qIndex}.options.${optIndex}.isCorrect`, isCorrect);
+  const handleOptionImageUpload = async (qIndex: number, optIndex: number, file: File) => {
+    setUploadingImageIndex({q: qIndex, o: optIndex});
+    setUploadError(null);
+    try {
+      const url = await uploadImageToSupabase(file, `quiz-options`);
+      console.log('Option image uploaded URL:', url); // Debug log
+      if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+        setUploadError('Image upload failed: Invalid URL');
+        return;
       }
-    };
-
-    return options.map((opt, optIndex) => (
-      <Stack key={optIndex} direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            questionType === 'single' ? (
-              <Radio
-                checked={opt.isCorrect}
-                onChange={() => handleOptionChange(optIndex, true)}
-                color="primary"
-              />
-            ) : (
-              <Checkbox
-                checked={opt.isCorrect}
-                onChange={(e) => handleOptionChange(optIndex, e.target.checked)}
-                color="primary"
-              />
-            )
-          }
-          label={
-            <TextField
-              fullWidth
-              variant="outlined"
-              size="small"
-              value={opt.text}
-              onChange={(e) => setValue(`questions.${qIndex}.options.${optIndex}.text`, e.target.value)}
-              sx={{ backgroundColor: 'background.paper', borderRadius: 1 }}
-            />
-          }
-          sx={{ flex: 1, alignItems: 'center' }}
-        />
-        <Button
-          variant="outlined"
-          component="label"
-          startIcon={<CloudUploadIcon />}
-          sx={{ minWidth: 120 }}
-        >
-          Image
-          <input
-            type="file"
-            hidden
-            accept="image/*"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (file) {
-                try {
-                  const url = await uploadImageToSupabase(file, 'options');
-                  setValue(`questions.${qIndex}.options.${optIndex}.image`, url);
-                } catch {
-                  showToast('Image upload failed', 'error');
-                }
-              }
-            }}
-          />
-        </Button>
-        {opt.image && (
-          <Box
-            component="img"
-            src={opt.image}
-            alt="Option"
-            sx={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 1, border: '1px solid #eee' }}
-          />
-        )}
-      </Stack>
-    ));
+      const options = [...watch(`questions.${qIndex}.options`)];
+      options[optIndex].image = url;
+      setValue(`questions.${qIndex}.options`, options);
+    } catch (err: any) {
+      setUploadError(err.message || 'Image upload failed');
+    } finally {
+      setUploadingImageIndex(null);
+    }
   };
+
+  // Memoized QuestionAccordion
+  const QuestionAccordion = React.memo(function QuestionAccordion({ q, i, opts }: { q: any, i: number, opts: any[] }) {
+    return (
+      <Slide key={q.id} direction="up" in mountOnEnter unmountOnExit>
+        <Accordion
+          expanded={expandedIndex === i}
+          onChange={() => setExpandedIndex(expandedIndex === i ? -1 : i)}
+          sx={{ borderRadius: 3, boxShadow: 4, mb: 1, transition: 'box-shadow 0.2s', border: '1.5px solid', borderColor: 'divider', bgcolor: 'background.paper' }}
+          id={`question-accordion-${i}`}
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Box sx={{ flex: 1 }}>
+              <Stack direction="row" alignItems="center" spacing={2}>
+                <Chip label={`Question ${i + 1}`} color="primary" size="medium" sx={{ fontWeight: 700, fontSize: '1.1rem' }} />
+                <Typography fontWeight={600} sx={{ color: 'text.primary' }}>{watch(`questions.${i}.question`) || `Question ${i + 1}`}</Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center" mt={1}>
+                <Chip label={watch(`questions.${i}.questionType`) === 'multiple' ? 'Multiple' : 'Single'} color="info" size="small" />
+                <Chip label={`Marks: ${watch(`questions.${i}.marks`)}`} color="secondary" size="small" />
+              </Stack>
+            </Box>
+            <Stack direction="row" spacing={1}>
+              <Tooltip title="Move Up"><span><IconButton disabled={i === 0} onClick={() => move(i, i - 1)}><ArrowUpwardIcon /></IconButton></span></Tooltip>
+              <Tooltip title="Move Down"><span><IconButton disabled={i === questionFields.length - 1} onClick={() => move(i, i + 1)}><ArrowDownwardIcon /></IconButton></span></Tooltip>
+              {/* Duplicate Button */}
+              <Tooltip title="Duplicate Question"><span><IconButton color="info" onClick={() => {
+                const questions = methods.getValues('questions');
+                const toDuplicate = { ...questions[i], options: questions[i].options.map((o: any) => ({ ...o })) };
+                const newQuestions = [...questions.slice(0, i + 1), toDuplicate, ...questions.slice(i + 1)];
+                reset({ ...methods.getValues(), questions: newQuestions });
+              }}><AddIcon /></IconButton></span></Tooltip>
+              <Tooltip title="Delete Question"><span><IconButton color="error" onClick={() => setDeleteDialog({ open: true, index: i })}><DeleteIcon /></IconButton></span></Tooltip>
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={2}>
+              <TextField label="Question" {...register(`questions.${i}.question`)} fullWidth required error={!!errors.questions?.[i]?.question} helperText={errors.questions?.[i]?.question?.message} />
+              {/* Question image upload */}
+              <Box display="flex" alignItems="center" gap={2}>
+                {watch(`questions.${i}.image`) && typeof watch(`questions.${i}.image`) === 'string' && (
+                  <img src={watch(`questions.${i}.image`)} alt="Question" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  id={`question-image-${i}`}
+                  onChange={async e => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setUploadingImageIndex({q: i, o: -1});
+                      setUploadError(null);
+                      try {
+                        const url = await uploadImageToSupabase(file, `quiz-questions`);
+                        setValue(`questions.${i}.image`, url);
+                      } catch (err: any) {
+                        setUploadError(err.message || 'Image upload failed');
+                      } finally {
+                        setUploadingImageIndex(null);
+                      }
+                    }
+                  }}
+                />
+                <label htmlFor={`question-image-${i}`}>
+                  <Tooltip title="Upload Image">
+                    <IconButton component="span" color="primary" disabled={!!uploadingImageIndex && uploadingImageIndex.q === i && uploadingImageIndex.o === -1}>
+                      <ImageIcon />
+                    </IconButton>
+                  </Tooltip>
+                </label>
+                {uploadingImageIndex && uploadingImageIndex.q === i && uploadingImageIndex.o === -1 && <LinearProgress sx={{ width: 40, mt: 1 }} />}
+                {watch(`questions.${i}.image`) && typeof watch(`questions.${i}.image`) === 'string' && (
+                  <IconButton color="error" onClick={() => setValue(`questions.${i}.image`, null)}>
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                )}
+              </Box>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                <Select label="Type" value={watch(`questions.${i}.questionType`) as 'single' | 'multiple'} onChange={e => setValue(`questions.${i}.questionType`, e.target.value as 'single' | 'multiple')} fullWidth>
+                  <MenuItem value="single">Single Correct</MenuItem>
+                  <MenuItem value="multiple">Multiple Correct</MenuItem>
+                </Select>
+                <TextField label="Marks" type="number" {...register(`questions.${i}.marks`)} fullWidth required error={!!errors.questions?.[i]?.marks} helperText={errors.questions?.[i]?.marks?.message} />
+              </Stack>
+              <TextField label="Explanation" {...register(`questions.${i}.explanation`)} fullWidth multiline minRows={2} error={!!errors.questions?.[i]?.explanation} helperText={errors.questions?.[i]?.explanation?.message} />
+              <Typography variant="subtitle2" sx={{ mt: 1 }}>Options</Typography>
+              <Stack spacing={1}>
+                {opts.map((opt, j) => (
+                  <Stack key={j} direction="row" spacing={2} alignItems="center" sx={{ border: opt.isCorrect ? '2px solid #1976d2' : '1px solid #eee', borderRadius: 2, p: 1, background: 'background.paper' }}>
+                    <Chip label={String.fromCharCode(65 + j)} color="default" />
+                    <TextField label={`Option ${j + 1}`} {...register(`questions.${i}.options.${j}.text`)} fullWidth required error={!!errors.questions?.[i]?.options?.[j]?.text} helperText={errors.questions?.[i]?.options?.[j]?.text?.message} />
+                    {/* Image upload for option */}
+                    <Box>
+                      {opt.image && (
+                        <img
+                          src={opt.image}
+                          alt="Option"
+                          style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, marginRight: 8 }}
+                          onError={e => {
+                            (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40?text=No+Img';
+                          }}
+                        />
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: 'none' }}
+                        id={`option-image-${i}-${j}`}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (file) handleOptionImageUpload(i, j, file);
+                        }}
+                      />
+                      <label htmlFor={`option-image-${i}-${j}`}>
+                        <Tooltip title="Upload Image">
+                          <IconButton component="span" color="primary" disabled={!!uploadingImageIndex && uploadingImageIndex.q === i && uploadingImageIndex.o === j}>
+                            <ImageIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </label>
+                      {uploadingImageIndex && uploadingImageIndex.q === i && uploadingImageIndex.o === j && <LinearProgress sx={{ width: 40, mt: 1 }} />}
+                      {opt.image && (
+                        <IconButton color="error" onClick={() => {
+                          const options = [...opts];
+                          options[j].image = null;
+                          setValue(`questions.${i}.options`, options);
+                        }}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Box>
+                    {watch(`questions.${i}.questionType`) === 'single' ? (
+                      <Tooltip title={opt.isCorrect ? 'Correct Answer' : 'Mark as Correct'}>
+                        <Radio
+                          checked={opt.isCorrect || false}
+                          onChange={() => {
+                            // Only one can be correct
+                            const updated = opts.map((o, idx) => ({ ...o, isCorrect: idx === j }));
+                            setValue(`questions.${i}.options`, updated);
+                          }}
+                          color="primary"
+                        />
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title={opt.isCorrect ? 'Correct Answer' : 'Mark as Correct'}>
+                        <Checkbox
+                          checked={opt.isCorrect || false}
+                          onChange={e => {
+                            const updated = opts.map((o, idx) => idx === j ? { ...o, isCorrect: e.target.checked } : o);
+                            setValue(`questions.${i}.options`, updated);
+                          }}
+                          color="primary"
+                        />
+                      </Tooltip>
+                    )}
+                    <Tooltip title="Delete Option"><span><IconButton color="error" onClick={() => setValue(`questions.${i}.options`, opts.filter((_, idx) => idx !== j))}><DeleteIcon /></IconButton></span></Tooltip>
+                  </Stack>
+                ))}
+                <Button variant="outlined" onClick={() => setValue(`questions.${i}.options`, [...opts, { text: '', image: null, isCorrect: false }])} sx={{ mt: 1 }}>+ Add Option</Button>
+              </Stack>
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+      </Slide>
+    );
+  });
 
   if (!mounted) return null;
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
-      <Container maxWidth="md" sx={{ py: 4 }}>
+      <Container maxWidth="md" sx={{ py: 5 }}>
+        {/* Sticky Top Bar */}
+        <Paper elevation={4} sx={{ position: 'sticky', top: 0, zIndex: 20, mb: 3, borderRadius: 0, p: 2, bgcolor: 'background.paper', boxShadow: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography variant="h5" fontWeight={700} color="primary.main">
+            {quizTitle || 'Create New Quiz'}
+          </Typography>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Tooltip title="Toggle theme">
+              <IconButton onClick={toggleMode}>
+                {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+              </IconButton>
+            </Tooltip>
+            <Button onClick={() => router.push('/dashboard')} variant="outlined" color="primary">
+              ← Dashboard
+            </Button>
+          </Stack>
+        </Paper>
         <Paper elevation={3} sx={{ p: 4, borderRadius: 3 }}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
             <Typography variant="h4" fontWeight={600} color="primary">
@@ -412,7 +612,7 @@ export default function CreateQuizPage() {
               <Button
                 variant="contained"
                 component="label"
-                startIcon={<CloudUploadIcon />}
+                startIcon={<ImageIcon />}
                 sx={{ textTransform: 'none' }}
               >
                 Upload CSV
@@ -426,243 +626,105 @@ export default function CreateQuizPage() {
 
           <FormProvider {...methods}>
             <form onSubmit={handleSubmit((data) => onSubmit(data, false))}>
-              <Stack spacing={3}>
-                <TextField
-                  label="Quiz Title"
-                  {...register('quizTitle')}
-                  fullWidth
-                  required
-                  error={!!errors.quizTitle}
-                  helperText={errors.quizTitle?.message}
-                  variant="outlined"
-                  sx={{ mb: 2 }}
-                />
+              <Stack spacing={4}>
+                <Typography variant="h4" sx={{ fontWeight: 700, mb: 2 }}>Create Quiz</Typography>
 
-                <TextField
-                  label="Description"
-                  {...register('description')}
-                  fullWidth
-                  multiline
-                  rows={3}
-                  variant="outlined"
-                />
+                {/* Quiz Information Section (restored) */}
+                <Paper elevation={3} sx={{ p: 3, borderRadius: 3, mb: 3 }}>
+                  <Typography variant="h6" sx={{ mb: 2, color: 'primary.main' }}>Quiz Information</Typography>
+                  <Stack spacing={2}>
+                    <TextField label="Quiz Title" {...register("quizTitle")}
+                      fullWidth helperText="Enter a descriptive title for your quiz."
+                      error={!!errors.quizTitle} />
+                    {errors.quizTitle && <Typography color="error" variant="caption">{errors.quizTitle.message}</Typography>}
+                    <TextField label="Description" {...register("description")}
+                      fullWidth multiline minRows={2}
+                      helperText="Describe the quiz for students (optional)."
+                      error={!!errors.description} />
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                      <TextField label="Total Marks" type="number" {...register("totalMarks")}
+                        fullWidth helperText="Sum of all question marks."
+                        error={!!errors.totalMarks} />
+                      <TextField label="Duration (mins)" type="number" {...register("duration")}
+                        fullWidth helperText="How long students have to complete the quiz."
+                        error={!!errors.duration} />
+                    </Stack>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                      <ModernDateTimePicker label="Start Date & Time"
+                        value={watch("startDateTime") instanceof Date ? watch("startDateTime") : new Date()}
+                        onChange={date => setValue("startDateTime", date ?? new Date())} />
+                      <ModernDateTimePicker label="End Date & Time"
+                        value={watch("expiryDateTime") instanceof Date ? watch("expiryDateTime") : new Date()}
+                        onChange={date => setValue("expiryDateTime", date ?? new Date())} />
+                    </Stack>
+                    <TextField label="Max Attempts" type="number" {...register("maxAttempts")}
+                      fullWidth helperText="How many times a student can attempt this quiz."
+                      error={!!errors.maxAttempts} />
+                    <Stack direction="row" spacing={2}>
+                      <FormControlLabel control={<Checkbox {...register("previewMode")} />} label="Enable Preview Mode" />
+                      <FormControlLabel control={<Checkbox {...register("shuffleQuestions")} />} label="Shuffle Questions" />
+                      <FormControlLabel control={<Checkbox {...register("shuffleOptions")} />} label="Shuffle Options" />
+                    </Stack>
+                  </Stack>
+                </Paper>
 
-                <Stack direction="row" spacing={2}>
-                  <TextField
-                    label="Total Marks"
-                    type="number"
-                    {...register('totalMarks')}
-                    fullWidth
-                    variant="outlined"
-                  />
-                  <TextField
-                    label="Duration (minutes)"
-                    type="number"
-                    {...register('duration')}
-                    fullWidth
-                    variant="outlined"
-                  />
-                </Stack>
+                {/* Question Navigation Bar */}
+                <Paper elevation={2} sx={{ p: 2, borderRadius: 2, mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', bgcolor: 'background.paper', boxShadow: 2 }}>
+                  {questionFields.map((q, i) => {
+                    const qVal = watch(`questions.${i}`);
+                    const isComplete = qVal && qVal.question && qVal.options && qVal.options.length >= 2 && qVal.options.every((opt: any) => opt.text);
+                    return (
+                      <Chip
+                        key={q.id}
+                        label={`Q${i + 1}`}
+                        color={isComplete ? 'primary' : 'warning'}
+                        variant={i === 0 ? 'filled' : 'outlined'}
+                        clickable
+                        onClick={() => {
+                          setExpandedIndex(i);
+                          const el = document.getElementById(`question-accordion-${i}`);
+                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }}
+                        sx={{ fontWeight: 600, fontSize: '1rem', mx: 0.5, my: 0.5, boxShadow: isComplete ? 2 : 0 }}
+                      />
+                    );
+                  })}
+                </Paper>
 
-                <Stack direction="row" spacing={2}>
-                  <ModernDateTimePicker
-                    label="Start Date & Time"
-                    value={watch('startDateTime')}
-                    onChange={(date) => setValue('startDateTime', date || new Date())}
-                  />
-                  <ModernDateTimePicker
-                    label="End Date & Time"
-                    value={watch('expiryDateTime')}
-                    onChange={(date) => setValue('expiryDateTime', date || new Date())}
-                  />
-                </Stack>
-
-                <Stack direction="row" spacing={2}>
-                  <TextField
-                    label="Max Attempts"
-                    type="number"
-                    {...register('maxAttempts')}
-                    fullWidth
-                    variant="outlined"
-                  />
-                  <TextField
-                    label="Passing Score (%)"
-                    type="number"
-                    {...register('passingScore')}
-                    fullWidth
-                    variant="outlined"
-                    inputProps={{ min: 0, max: 100 }}
-                  />
-                </Stack>
-
-                <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
-                  <FormControlLabel control={<Checkbox {...register('shuffleQuestions')} />} label="Shuffle Questions" />
-                  <FormControlLabel control={<Checkbox {...register('shuffleOptions')} />} label="Shuffle Options" />
-                  <FormControlLabel control={<Checkbox {...register('previewMode')} />} label="Preview Mode" />
-                  <FormControlLabel control={<Checkbox {...register('showCorrectAnswers')} />} label="Show Answers" />
-                </Stack>
-
-                <Divider sx={{ my: 3 }} />
-
-                <Typography variant="h6" sx={{ mb: 2 }}>
-                  Questions
-                </Typography>
-
-                {questionFields.map((q, qIndex) => {
-                  const questionType = watch(`questions.${qIndex}.questionType`);
-                  const options = watch(`questions.${qIndex}.options`);
-
-                  return (
-                    <Paper
-                      key={q.id}
-                      elevation={2}
-                      sx={{ p: 3, mb: 3, borderRadius: 2, borderLeft: '4px solid', borderColor: 'primary.main' }}
-                    >
-                      <Stack spacing={2}>
-                        <Stack direction="row" spacing={2} alignItems="flex-start">
-                          <TextField
-                            label={`Question ${qIndex + 1}`}
-                            {...register(`questions.${qIndex}.question`)}
-                            fullWidth
-                            required
-                            multiline
-                            variant="outlined"
-                          />
-                          <TextField
-                            label="Marks"
-                            type="number"
-                            {...register(`questions.${qIndex}.marks`)}
-                            sx={{ width: 100 }}
-                            variant="outlined"
-                          />
-                        </Stack>
-
-                        <FormControl fullWidth size="small">
-                          <InputLabel>Question Type</InputLabel>
-                          <Select
-                            value={questionType}
-                            label="Question Type"
-                            onChange={(e) => setValue(`questions.${qIndex}.questionType`, e.target.value as 'single' | 'multiple')}
-                            variant="outlined"
-                          >
-                            <MenuItem value="single">Single Correct Answer</MenuItem>
-                            <MenuItem value="multiple">Multiple Correct Answers</MenuItem>
-                          </Select>
-                        </FormControl>
-
-                        <Button
-                          variant="outlined"
-                          component="label"
-                          startIcon={<CloudUploadIcon />}
-                          sx={{ alignSelf: 'flex-start' }}
-                        >
-                          Upload Question Image
-                          <input
-                            type="file"
-                            hidden
-                            accept="image/*"
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                try {
-                                  const url = await uploadImageToSupabase(file, 'questions');
-                                  setValue(`questions.${qIndex}.image`, url);
-                                } catch {
-                                  showToast('Image upload failed', 'error');
-                                }
-                              }
-                            }}
-                          />
-                        </Button>
-
-                        {watch(`questions.${qIndex}.image`) && (
-                          <Box
-                            component="img"
-                            src={watch(`questions.${qIndex}.image`)}
-                            alt="Question"
-                            sx={{ maxWidth: 200, maxHeight: 200, objectFit: 'contain', borderRadius: 1 }}
-                          />
-                        )}
-
-                        <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 1 }}>
-                          {questionType === 'single' ? 'Select one correct answer' : 'Select all correct answers'}
-                        </Typography>
-
-                        {renderOptions(qIndex, options, questionType)}
-
-                        <Button
-                          startIcon={<AddIcon />}
-                          onClick={() =>
-                            setValue(`questions.${qIndex}.options`, [...options, { text: '', image: null, isCorrect: false }])
-                          }
-                          variant="outlined"
-                          sx={{ alignSelf: 'flex-start' }}
-                        >
-                          Add Option
-                        </Button>
-
-                        <TextField
-                          label="Explanation (shown after answering)"
-                          {...register(`questions.${qIndex}.explanation`)}
-                          fullWidth
-                          multiline
-                          rows={2}
-                          variant="outlined"
-                        />
-
-                        <Button
-                          startIcon={<DeleteIcon />}
-                          onClick={() => remove(qIndex)}
-                          color="error"
-                          variant="outlined"
-                          sx={{ alignSelf: 'flex-end' }}
-                        >
-                          Remove Question
-                        </Button>
-                      </Stack>
-                    </Paper>
-                  );
-                })}
-
-                <Button
-                  startIcon={<AddIcon />}
-                  onClick={() =>
-                    append({
-                      question: '',
-                      questionType: 'single',
-                      image: null,
-                      explanation: '',
-                      marks: '1',
-                      options: [
-                        { text: '', image: null, isCorrect: false },
-                        { text: '', image: null, isCorrect: false },
-                      ],
-                    })
-                  }
-                  variant="outlined"
-                  sx={{ mt: 2 }}
-                >
-                  Add Question
-                </Button>
-
-                <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 4 }}>
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="h6" sx={{ color: 'primary.main', mb: 2 }}>Questions</Typography>
+                <Stack spacing={2}>
+                  {questionFields.map((q, i) => {
+                    const opts = watch(`questions.${i}.options`);
+                    return <QuestionAccordion key={q.id} q={q} i={i} opts={opts} />;
+                  })}
                   <Button
-                    variant="outlined"
-                    onClick={handleSubmit((data) => onSubmit(data, true))}
-                    disabled={isSubmitting}
-                    sx={{ px: 4 }}
-                  >
-                    {isSubmitting ? <CircularProgress size={24} /> : 'Save Draft'}
-                  </Button>
-                  <Button
-                    type="submit"
                     variant="contained"
-                    disabled={isSubmitting}
-                    sx={{ px: 4 }}
+                    color="primary"
+                    onClick={() =>
+                      append({
+                        question: '',
+                        questionType: 'single',
+                        image: null,
+                        explanation: '',
+                        marks: '1',
+                        options: [
+                          { text: '', image: null, isCorrect: false },
+                          { text: '', image: null, isCorrect: false },
+                        ],
+                      })
+                    }
+                    sx={{ mt: 2, fontWeight: 700, borderRadius: 2, boxShadow: 2, px: 4 }}
+                    startIcon={<AddIcon />}
                   >
-                    {isSubmitting ? <CircularProgress size={24} /> : 'Publish Quiz'}
+                    Add Question
                   </Button>
                 </Stack>
+                <Box sx={{ position: 'sticky', bottom: 0, zIndex: 10, bgcolor: 'background.paper', py: 2, mt: 4, boxShadow: 3, borderRadius: 2, display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button type="submit" variant="contained" size="large" sx={{ px: 5, fontWeight: 700 }} disabled={isSubmitting}>
+                    {isSubmitting ? <CircularProgress size={24} /> : 'Create Quiz'}
+                  </Button>
+                </Box>
               </Stack>
             </form>
           </FormProvider>
@@ -699,6 +761,26 @@ export default function CreateQuizPage() {
             {toast.msg}
           </Alert>
         </Snackbar>
+        {uploadError && <Snackbar open={!!uploadError} autoHideDuration={4000} onClose={() => setUploadError(null)}>
+          <Alert severity="error" onClose={() => setUploadError(null)}>
+            {uploadError}
+          </Alert>
+        </Snackbar>}
+
+        {/* Delete confirmation dialog */}
+        <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, index: null })}>
+          <DialogTitle>Delete Question?</DialogTitle>
+          <DialogContent>
+            <Typography>Are you sure you want to delete this question? This cannot be undone.</Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDeleteDialog({ open: false, index: null })}>Cancel</Button>
+            <Button color="error" onClick={() => {
+              if (deleteDialog.index !== null) remove(deleteDialog.index);
+              setDeleteDialog({ open: false, index: null });
+            }}>Delete</Button>
+          </DialogActions>
+        </Dialog>
       </Container>
     </LocalizationProvider>
   );

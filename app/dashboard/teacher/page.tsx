@@ -135,25 +135,10 @@ export default function TeacherDashboardPage() {
                 <AppWelcome
                   title={`Welcome, ${user?.firstName || 'Teacher'}!`}
                   description="Create, manage, and track your quizzes from this dashboard."
+                  role="teacher"
+                  showCreateQuizButton={true}
+                  createQuizAction={() => router.push('/create-quiz')}
                 />
-              </Grid>
-              <Grid item xs={12} md={4} display="flex" justifyContent="flex-end">
-                <Button
-                  onClick={() => router.push('/create-quiz')}
-                  variant="contained"
-                  color="primary"
-                  sx={{
-                    px: 4,
-                    py: 1.75,
-                    fontWeight: 600,
-                    borderRadius: 2,
-                    minWidth: { xs: '100%', md: 180 },
-                    boxShadow: 3,
-                  }}
-                  fullWidth
-                >
-                  + CREATE NEW QUIZ
-                </Button>
               </Grid>
             </Grid>
 

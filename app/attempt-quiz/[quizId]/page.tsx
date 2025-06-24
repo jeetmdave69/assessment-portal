@@ -76,6 +76,8 @@ interface Quiz {
   passing_score: number
   show_correct_answers: boolean
   description?: string
+  shuffle_questions: boolean
+  shuffle_options: boolean
 }
 
 interface QuizSessionData {
@@ -152,8 +154,20 @@ const validateQuiz = (quiz: any): Quiz => {
     max_attempts: Math.max(0, Number(quiz.max_attempts) || 0),
     passing_score: Math.max(0, Number(quiz.passing_score) || 0),
     show_correct_answers: Boolean(quiz.show_correct_answers),
-    description: quiz.description ? String(quiz.description) : undefined
+    description: quiz.description ? String(quiz.description) : undefined,
+    shuffle_questions: Boolean(quiz.shuffle_questions),
+    shuffle_options: Boolean(quiz.shuffle_options)
   }
+}
+
+// Add shuffle utility
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 // Custom Components
@@ -527,7 +541,18 @@ export default function QuizAttemptPage() {
         }
 
         const validatedQuiz = validateQuiz(quizResponse.data)
-        const validatedQuestions = questionsResponse.data.map(validateQuestion)
+        let validatedQuestions = questionsResponse.data.map(validateQuestion)
+
+        // Shuffle questions and options for each student if enabled
+        if (validatedQuiz.shuffle_questions) {
+          validatedQuestions = shuffleArray(validatedQuestions)
+        }
+        if (validatedQuiz.shuffle_options) {
+          validatedQuestions = validatedQuestions.map(q => ({
+            ...q,
+            options: shuffleArray(q.options)
+          }))
+        }
 
         setQuiz(validatedQuiz)
         setQuestions(validatedQuestions)
@@ -572,7 +597,7 @@ export default function QuizAttemptPage() {
         setQuizNotFound(true)
         clearSession()
       } finally {
-        setTimeout(() => setLoading(false), LOADING_DELAY)
+        setLoading(false)
       }
     }
 
@@ -618,7 +643,7 @@ export default function QuizAttemptPage() {
         console.error('Attempts loading error:', err)
         setError('Failed to load attempt history')
       } finally {
-        setTimeout(() => setAttemptsLoading(false), LOADING_DELAY)
+        setAttemptsLoading(false)
       }
     }
     
@@ -694,45 +719,59 @@ export default function QuizAttemptPage() {
   }
 
   const submitQuizAttempt = async () => {
+    // Guard: Prevent submission if required data is missing
+    if (!user || !quizId || !quiz || !questions.length) {
+      console.error('Submission blocked: missing user, quizId, quiz, or questions', { user, quizId, quiz, questions });
+      throw new Error('Quiz is not fully loaded. Please wait and try again.');
+    }
     const now = Date.now()
     if (now - lastSubmissionAttempt < SUBMISSION_COOLDOWN) {
       throw new Error('Please wait before submitting again')
     }
     setLastSubmissionAttempt(now)
 
-    if (!user || !quizId || !quiz || !isUserLoaded) {
-      throw new Error('Authentication required')
-    }
-
     if (quiz.max_attempts > 0 && attemptCount >= quiz.max_attempts) {
       throw new Error(`Maximum attempts reached (${quiz.max_attempts})`)
     }
 
     const payload = buildSubmissionPayload()
+    console.log('buildSubmissionPayload result:', payload)
+    console.log('submitQuizAttempt debug:', {
+      user,
+      quizId,
+      quiz,
+      questions,
+      answers,
+      markedForReview,
+      payload
+    })
     
     try {
+      // Prepare insert payload with correct types and only required fields
+      const insertPayload = {
+        quiz_id: Number(quizId),
+        user_id: String(user.id),
+        user_name: user.fullName || 'Anonymous',
+        answers: payload.userAnswers,
+        correct_answers: payload.correctAnswersMap,
+        score: Math.max(0, payload.score),
+        total_marks: Math.max(0, questions.reduce((sum, q) => sum + q.marks, 0)),
+        marked_questions: markedForReview
+      };
+
       const { data, error } = await supabase
         .from('attempts')
-        .insert({
-          quiz_id: Number(quizId),
-          user_id: user.id,
-          user_name: user.fullName || 'Anonymous',
-          answers: payload.userAnswers,
-          correct_answers: payload.correctAnswersMap,
-          submitted_at: new Date().toISOString(),
-          score: payload.score,
-          total_marks: questions.reduce((sum, q) => sum + q.marks, 0),
-          marked_questions: markedForReview
-        })
+        .insert(insertPayload)
         .select()
         .single()
 
+      console.log('Supabase insert result:', { data, error, insertPayload });
       if (error) throw error
       if (!data) throw new Error('No data returned from submission')
 
       return data
     } catch (err) {
-      console.error('Submission error:', err)
+      console.error('Submission error:', err, 'Payload:', payload)
       throw new Error('Submission failed. Please try again.')
     }
   }
@@ -861,506 +900,454 @@ export default function QuizAttemptPage() {
 
   // Main render
   return (
-    <motion.div 
-      initial={{ opacity: 0 }} 
-      animate={{ opacity: 1 }} 
-      transition={{ duration: ANIMATION_DURATION }}
-    >
-      <Box sx={{ 
-        minHeight: '100vh', 
-        background: 'linear-gradient(to bottom, #f5f7fa 0%, #e4e8ed 100%)',
-        py: 4 
-      }}>
-        <Container maxWidth="lg">
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={3}>
-            {/* Navigation Panel */}
-            <Paper sx={{ 
-              p: 3, 
-              borderRadius: 3,
-              bgcolor: 'background.paper',
-              boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
-              position: 'sticky',
-              top: 20,
-              alignSelf: 'flex-start',
-              transition: 'all 0.3s ease',
-              border: '1px solid rgba(0,0,0,0.05)',
-              width: isMobile ? '100%' : 300,
-              flexShrink: 0
-            }}>
-              <Stack direction="row" alignItems="center" spacing={1} mb={2}>
-                <EmojiEventsIcon color="primary" />
-                <Typography variant="subtitle1" fontWeight={700}>
-                  Quiz Navigation
+    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, minHeight: '100vh', bgcolor: 'background.default' }}>
+      {/* Sticky Sidebar Navigation (Desktop) */}
+      <Box
+        sx={{
+          width: { xs: '100%', md: 280 },
+          flexShrink: 0,
+          bgcolor: 'background.paper',
+          borderRight: { md: '1px solid #e0e0e0' },
+          boxShadow: { md: 2 },
+          position: { md: 'sticky' },
+          top: { md: 0 },
+          height: { md: '100vh' },
+          zIndex: 10,
+          p: { xs: 2, md: 3 },
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+        }}
+      >
+        {/* Timer at the top */}
+        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center' }}>
+          <TimeDisplay seconds={timeLeft || 0} />
+        </Box>
+        {/* Question Navigation */}
+        <Typography variant="subtitle1" fontWeight={700} mb={1} textAlign="center">
+          Questions
+        </Typography>
+        <Grid container spacing={1} justifyContent="center">
+          {questions.map((question, index) => (
+            <Grid item key={question.id}>
+              <QuestionNavigationButton
+                index={index}
+                current={index === currentQuestionIndex}
+                answered={!!answers[question.id]}
+                marked={markedForReview.includes(question.id)}
+                onClick={() => setCurrentQuestionIndex(index)}
+                disabled={submitted}
+              />
+            </Grid>
+          ))}
+        </Grid>
+        <Divider sx={{ my: 2 }} />
+        <Stack spacing={1}>
+          <Box display="flex" alignItems="center" justifyContent="space-between">
+            <Typography variant="body2" color="text.secondary">
+              Answered:
+            </Typography>
+            <Chip
+              label={`${answeredCount}/${questions.length}`}
+              color={answeredCount === questions.length ? 'success' : 'default'}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+          <Box display="flex" alignItems="center" justifyContent="space-between">
+            <Typography variant="body2" color="text.secondary">
+              Marked for Review:
+            </Typography>
+            <Chip
+              label={markedForReview.length}
+              color="warning"
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+          {quiz?.max_attempts > 0 && (
+            <Box display="flex" alignItems="center" justifyContent="space-between">
+              <Typography variant="body2" color="text.secondary">
+                Attempts:
+              </Typography>
+              <Chip
+                label={`${attemptCount}/${quiz.max_attempts}`}
+                color={attemptCount >= quiz.max_attempts ? 'error' : 'default'}
+                size="small"
+                variant="outlined"
+              />
+            </Box>
+          )}
+        </Stack>
+      </Box>
+
+      {/* Main Content Area */}
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', p: { xs: 2, md: 5 } }}>
+        {/* Quiz Header */}
+        <Paper
+          component={motion.div}
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: ANIMATION_DURATION }}
+          sx={{
+            p: 3,
+            borderRadius: 3,
+            bgcolor: 'background.paper',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+            border: '1px solid rgba(0,0,0,0.05)',
+            width: '100%',
+            maxWidth: 700,
+            mb: 3,
+          }}
+        >
+          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems="flex-start" gap={2}>
+            <Box>
+              <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>
+                {quiz?.quiz_title}
+              </Typography>
+              {quiz?.description && (
+                <Typography variant="body2" color="text.secondary">
+                  {quiz.description}
                 </Typography>
-              </Stack>
-              
-              <Grid container spacing={1} sx={{ mb: 3 }}>
-                {questions.map((question, index) => (
-                  <Grid item xs={4} sm={3} md={4} key={question.id}>
-                    <QuestionNavigationButton
-                      index={index}
-                      current={index === currentQuestionIndex}
-                      answered={!!answers[question.id]}
-                      marked={markedForReview.includes(question.id)}
-                      onClick={() => setCurrentQuestionIndex(index)}
-                      disabled={submitted}
-                    />
-                  </Grid>
-                ))}
-              </Grid>
-
-              <Divider sx={{ my: 2 }} />
-
-              <Stack spacing={2}>
-                <Box display="flex" alignItems="center" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Answered: 
-                  </Typography>
-                  <Chip 
-                    label={`${answeredCount}/${questions.length}`}
-                    color={answeredCount === questions.length ? 'success' : 'default'}
-                    size="small"
-                    variant="outlined"
-                  />
-                </Box>
-
-                <Box display="flex" alignItems="center" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Marked for Review:
-                  </Typography>
-                  <Chip 
-                    label={markedForReview.length}
-                    color="warning"
-                    size="small"
-                    variant="outlined"
-                  />
-                </Box>
-
-                <Box display="flex" alignItems="center" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">
-                    Time Remaining:
-                  </Typography>
-                  <TimeDisplay seconds={timeLeft || 0} />
-                </Box>
-
-                {quiz.max_attempts > 0 && (
-                  <Box display="flex" alignItems="center" justifyContent="space-between">
-                    <Typography variant="body2" color="text.secondary">
-                      Attempts:
-                    </Typography>
-                    <Chip 
-                      label={`${attemptCount}/${quiz.max_attempts}`}
-                      color={attemptCount >= quiz.max_attempts ? 'error' : 'default'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </Box>
-                )}
-              </Stack>
-
-              <Divider sx={{ my: 2 }} />
-
-              <LoadingButton
-                fullWidth
-                variant="contained"
-                color="primary"
-                onClick={handleSubmitClick}
-                disabled={submitted || timeLeft === 0 || (quiz.max_attempts > 0 && attemptCount >= quiz.max_attempts)}
-                loading={autoSubmitting}
-                sx={{ 
-                  mb: 1,
-                  py: 1.5,
-                  borderRadius: 2,
-                  fontWeight: 600,
-                  boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)'
-                }}
-                startIcon={<SendIcon />}
-              >
-                Submit Quiz
-              </LoadingButton>
-
-              {quiz.max_attempts > 0 && attemptCount >= quiz.max_attempts && (
-                <Alert severity="error" sx={{ mt: 1 }}>
-                  Maximum attempts reached ({quiz.max_attempts})
-                </Alert>
               )}
-
-              {sessionRestored && (
-                <Alert severity="info" sx={{ mt: 1 }}>
-                  Your previous session was restored
-                </Alert>
-              )}
-            </Paper>
-
-            {/* Main Content */}
-            <Box flex={1}>
-              <Stack spacing={3}>
-                {/* Quiz Header */}
-                <Paper 
-                  component={motion.div}
-                  initial={{ opacity: 0, y: -20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: ANIMATION_DURATION }}
-                  sx={{ 
-                    p: 3, 
-                    borderRadius: 3,
-                    bgcolor: 'background.paper',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                    border: '1px solid rgba(0,0,0,0.05)'
-                  }}
-                >
-                  <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems="flex-start" gap={2}>
-                    <Box>
-                      <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>
-                        {quiz.quiz_title}
-                      </Typography>
-                      {quiz.description && (
-                        <Typography variant="body2" color="text.secondary">
-                          {quiz.description}
-                        </Typography>
-                      )}
-                    </Box>
-                    <TimeDisplay seconds={timeLeft || 0} />
-                  </Stack>
-
-                  <LinearProgress
-                    variant="determinate"
-                    value={progress}
-                    sx={{ 
-                      height: 8, 
-                      mt: 2,
-                      borderRadius: 4,
-                      '& .MuiLinearProgress-bar': {
-                        bgcolor: timeLeft && timeLeft <= TIME_WARNING_THRESHOLD ? 'error.main' : 'primary.main',
-                        borderRadius: 4
-                      }
-                    }}
-                  />
-                </Paper>
-
-                {/* Current Question */}
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={currentQuestion?.id || 'empty'}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -20 }}
-                    transition={{ duration: ANIMATION_DURATION }}
-                  >
-                    {currentQuestion ? (
-                      <Card sx={{ 
-                        borderRadius: 3,
-                        boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
-                        border: '1px solid rgba(0,0,0,0.05)'
-                      }}>
-                        <CardContent>
-                          <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={2}>
-                            <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
-                              <Box component="span" color="primary.main">Q{currentQuestionIndex + 1}.</Box> {currentQuestion.question_text}
-                            </Typography>
-                            <Stack direction="row" alignItems="center" spacing={1}>
-                              <Chip 
-                                label={`${currentQuestion.marks} mark${currentQuestion.marks > 1 ? 's' : ''}`}
-                                color="secondary"
-                                size="small"
-                                variant="outlined"
-                              />
-                              <Tooltip title={markedForReview.includes(currentQuestion.id) ? "Unmark for review" : "Mark for review"}>
-                                <IconButton
-                                  onClick={() => toggleMarkForReview(currentQuestion.id)}
-                                  disabled={submitted}
-                                  color={markedForReview.includes(currentQuestion.id) ? "warning" : "default"}
-                                  size="small"
-                                >
-                                  {markedForReview.includes(currentQuestion.id) ? (
-                                    <FlagIcon color="warning" />
-                                  ) : (
-                                    <OutlinedFlagIcon />
-                                  )}
-                                </IconButton>
-                              </Tooltip>
-                            </Stack>
-                          </Stack>
-
-                          {currentQuestion.image_url && (
-                            <motion.div
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              transition={{ delay: 0.2 }}
-                            >
-                              <Box 
-                                component="img" 
-                                src={currentQuestion.image_url} 
-                                alt="Question" 
-                                sx={{ 
-                                  maxWidth: '100%', 
-                                  maxHeight: 300, 
-                                  mb: 3,
-                                  borderRadius: 2,
-                                  boxShadow: 3,
-                                  border: '1px solid rgba(0,0,0,0.1)'
-                                }} 
-                              />
-                            </motion.div>
-                          )}
-
-                          <FormGroup>
-                            {currentQuestion.options.map((option: QuizOption, index: number) => {
-                              const isSingle = currentQuestion.question_type === 'single'
-                              const isChecked = answers[currentQuestion.id]?.includes(index) || false
-                              const isCorrect = currentQuestion.correct_answers.includes(index)
-                              
-                              return (
-                                <motion.div
-                                  key={index}
-                                  initial={{ opacity: 0, y: 10 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: index * 0.05 }}
-                                >
-                                  <FormControlLabel
-                                    control={
-                                      isSingle ? (
-                                        <Radio
-                                          checked={isChecked}
-                                          onChange={() => handleAnswerChange(currentQuestion.id, index)}
-                                          disabled={submitted}
-                                          name={`question-${currentQuestion.id}`}
-                                          color={submitted && isCorrect ? 'success' : 'primary'}
-                                        />
-                                      ) : (
-                                        <Checkbox
-                                          checked={isChecked}
-                                          onChange={() => handleAnswerChange(currentQuestion.id, index)}
-                                          disabled={submitted}
-                                          color={submitted && isCorrect ? 'success' : 'primary'}
-                                        />
-                                      )
-                                    }
-                                    label={
-                                      <Typography>
-                                        {option.text}
-                                        {submitted && isCorrect && (
-                                          <Box 
-                                            component="span" 
-                                            sx={{ 
-                                              color: 'success.main', 
-                                              ml: 1,
-                                              fontWeight: 'bold'
-                                            }}
-                                          >
-                                            ✓ Correct
-                                          </Box>
-                                        )}
-                                      </Typography>
-                                    }
-                                    sx={{
-                                      p: 1.5,
-                                      borderRadius: 2,
-                                      bgcolor: submitted && isCorrect 
-                                        ? 'rgba(76, 175, 80, 0.1)' 
-                                        : isChecked
-                                          ? 'rgba(25, 118, 210, 0.1)'
-                                          : 'transparent',
-                                      mb: 1,
-                                      transition: 'all 0.2s ease',
-                                      border: '1px solid',
-                                      borderColor: submitted && isCorrect 
-                                        ? 'success.light'
-                                        : isChecked
-                                          ? 'primary.light'
-                                          : 'transparent',
-                                      '&:hover': {
-                                        bgcolor: submitted 
-                                          ? 'transparent' 
-                                          : 'rgba(0, 0, 0, 0.04)'
-                                      }
-                                    }}
-                                  />
-                                </motion.div>
-                              )
-                            })}
-                          </FormGroup>
-
-                          {submitted && currentQuestion.explanation && (
-                            <ExplanationBox explanation={currentQuestion.explanation} />
-                          )}
-                        </CardContent>
-                      </Card>
-                    ) : (
-                      <Skeleton variant="rounded" width="100%" height={400} sx={{ borderRadius: 3 }} />
-                    )}
-                  </motion.div>
-                </AnimatePresence>
-
-                {/* Navigation Buttons */}
-                <Box 
-                  display="flex" 
-                  justifyContent="space-between"
-                  component={motion.div}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.2 }}
-                >
-                  <LoadingButton
-                    variant="outlined"
-                    onClick={() => navigateQuestion('prev')}
-                    disabled={currentQuestionIndex === 0 || submitted}
-                    loading={autoSubmitting}
-                    startIcon={<NavigateBeforeIcon />}
-                    sx={{
-                      px: 4,
-                      py: 1.5,
-                      borderRadius: 3,
-                      fontWeight: 600
-                    }}
-                  >
-                    Previous
-                  </LoadingButton>
-                  
-                  {!isLastQuestion ? (
-                    <LoadingButton
-                      variant="contained"
-                      onClick={() => navigateQuestion('next')}
-                      disabled={submitted}
-                      loading={autoSubmitting}
-                      endIcon={<NavigateNextIcon />}
-                      sx={{
-                        px: 4,
-                        py: 1.5,
-                        borderRadius: 3,
-                        fontWeight: 600,
-                        boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)'
-                      }}
-                    >
-                      Next
-                    </LoadingButton>
-                  ) : (
-                    <LoadingButton
-                      variant="contained"
-                      color="primary"
-                      onClick={handleSubmitClick}
-                      disabled={submitted || timeLeft === 0 || (quiz.max_attempts > 0 && attemptCount >= quiz.max_attempts)}
-                      loading={autoSubmitting}
-                      endIcon={<DoneAllIcon />}
-                      sx={{
-                        px: 4,
-                        py: 1.5,
-                        borderRadius: 3,
-                        fontWeight: 600,
-                        boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)'
-                      }}
-                    >
-                      Submit Quiz
-                    </LoadingButton>
-                  )}
-                </Box>
-              </Stack>
+            </Box>
+            {/* Timer for mobile */}
+            <Box sx={{ display: { xs: 'block', md: 'none' } }}>
+              <TimeDisplay seconds={timeLeft || 0} />
             </Box>
           </Stack>
-        </Container>
+          <LinearProgress
+            variant="determinate"
+            value={progress}
+            sx={{
+              height: 8,
+              mt: 2,
+              borderRadius: 4,
+              '& .MuiLinearProgress-bar': {
+                bgcolor: timeLeft && timeLeft <= TIME_WARNING_THRESHOLD ? 'error.main' : 'primary.main',
+                borderRadius: 4,
+              },
+            }}
+          />
+        </Paper>
 
-        {/* Confirmation Dialog */}
-        <Dialog 
-          open={confirmDialogOpen} 
-          onClose={() => setConfirmDialogOpen(false)}
-          PaperProps={{
-            sx: {
-              borderRadius: 3,
-              p: 1
-            }
-          }}
-        >
-          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 600 }}>
-            <SendIcon color="primary" />
-            Confirm Submission
-          </DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              You've answered {answeredCount} out of {questions.length} questions.
-              {answeredCount < questions.length && (
-                <Box component="span" color="error.main" fontWeight={600}>
-                  {' '}You have {questions.length - answeredCount} unanswered questions.
-                </Box>
-              )}
-            </DialogContentText>
-            <DialogContentText sx={{ mt: 2 }}>
-              You've marked {markedForReview.length} questions for review.
-            </DialogContentText>
-            <DialogContentText sx={{ mt: 2 }}>
-              Are you sure you want to submit your quiz?
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button 
-              onClick={() => setConfirmDialogOpen(false)}
-              sx={{ borderRadius: 2, fontWeight: 600 }}
-            >
-              Cancel
-            </Button>
-            <LoadingButton 
-              onClick={confirmSubmission} 
-              variant="contained"
-              loading={autoSubmitting}
-              sx={{ borderRadius: 2, fontWeight: 600 }}
-              startIcon={<SendIcon />}
-            >
-              Submit
-            </LoadingButton>
-          </DialogActions>
-        </Dialog>
-
-        {/* Time Up Dialog */}
-        <Dialog 
-          open={timeUpDialogOpen}
-          PaperProps={{
-            sx: {
-              borderRadius: 3,
-              p: 1
-            }
-          }}
-        >
-          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 600 }}>
-            <TimerIcon color="error" />
-            Time's Up!
-          </DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              Your quiz is being automatically submitted. Please wait...
-            </DialogContentText>
-            <Box display="flex" justifyContent="center" mt={3}>
-              <CircularProgress size={60} thickness={4} />
-            </Box>
-          </DialogContent>
-        </Dialog>
-
-        {/* Error Alert */}
-        <AnimatePresence>
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              transition={{ duration: ANIMATION_DURATION }}
-            >
-              <Alert 
-                severity="error" 
-                onClose={() => setError(null)}
-                sx={{ 
-                  position: 'fixed', 
-                  bottom: 20, 
-                  right: 20, 
-                  minWidth: 300,
-                  boxShadow: 3,
+        {/* Current Question Card */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={currentQuestion?.id || 'empty'}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: ANIMATION_DURATION }}
+            style={{ width: '100%', maxWidth: 700 }}
+          >
+            {currentQuestion ? (
+              <Card
+                sx={{
                   borderRadius: 3,
-                  border: '1px solid rgba(211, 47, 47, 0.2)'
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+                  border: '1px solid rgba(0,0,0,0.05)',
+                  mb: 3,
                 }}
               >
-                <Typography fontWeight={600}>{error}</Typography>
-              </Alert>
-            </motion.div>
-          )}
+                <CardContent>
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={2}>
+                    <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
+                      <Box component="span" color="primary.main">Q{currentQuestionIndex + 1}.</Box> {currentQuestion.question_text}
+                    </Typography>
+                    <Stack direction="row" alignItems="center" spacing={1}>
+                      <Chip
+                        label={`${currentQuestion.marks} mark${currentQuestion.marks > 1 ? 's' : ''}`}
+                        color="secondary"
+                        size="small"
+                        variant="outlined"
+                      />
+                      <Tooltip title={markedForReview.includes(currentQuestion.id) ? "Unmark for review" : "Mark for review"}>
+                        <IconButton
+                          onClick={() => toggleMarkForReview(currentQuestion.id)}
+                          disabled={submitted}
+                          color={markedForReview.includes(currentQuestion.id) ? "warning" : "default"}
+                          size="small"
+                        >
+                          {markedForReview.includes(currentQuestion.id) ? (
+                            <FlagIcon color="warning" />
+                          ) : (
+                            <OutlinedFlagIcon />
+                          )}
+                        </IconButton>
+                      </Tooltip>
+                    </Stack>
+                  </Stack>
+                  {currentQuestion.image_url && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: 0.2 }}
+                    >
+                      <Box
+                        component="img"
+                        src={currentQuestion.image_url}
+                        alt="Question"
+                        sx={{
+                          maxWidth: '100%',
+                          maxHeight: 300,
+                          mb: 3,
+                          borderRadius: 2,
+                          boxShadow: 3,
+                          border: '1px solid rgba(0,0,0,0.1)',
+                        }}
+                      />
+                    </motion.div>
+                  )}
+                  <FormGroup>
+                    {currentQuestion.options.map((option: QuizOption, index: number) => {
+                      const isSingle = currentQuestion.question_type === 'single'
+                      const isChecked = answers[currentQuestion.id]?.includes(index) || false
+                      const isCorrect = currentQuestion.correct_answers.includes(index)
+                      return (
+                        <motion.div
+                          key={index}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: index * 0.05 }}
+                        >
+                          <FormControlLabel
+                            control={
+                              isSingle ? (
+                                <Radio
+                                  checked={isChecked}
+                                  onChange={() => handleAnswerChange(currentQuestion.id, index)}
+                                  disabled={submitted}
+                                  name={`question-${currentQuestion.id}`}
+                                  color={submitted && isCorrect ? 'success' : 'primary'}
+                                />
+                              ) : (
+                                <Checkbox
+                                  checked={isChecked}
+                                  onChange={() => handleAnswerChange(currentQuestion.id, index)}
+                                  disabled={submitted}
+                                  color={submitted && isCorrect ? 'success' : 'primary'}
+                                />
+                              )
+                            }
+                            label={
+                              <Typography sx={{ fontSize: '1.05rem', fontWeight: 500 }}>
+                                {option.text}
+                                {submitted && isCorrect && (
+                                  <Box
+                                    component="span"
+                                    sx={{
+                                      color: 'success.main',
+                                      ml: 1,
+                                      fontWeight: 'bold',
+                                    }}
+                                  >
+                                    ✓
+                                  </Box>
+                                )}
+                              </Typography>
+                            }
+                            sx={{
+                              mb: 1.5,
+                              pl: 1,
+                              pr: 2,
+                              py: 1,
+                              borderRadius: 2,
+                              bgcolor: submitted && isChecked && !isCorrect ? 'error.lighter' : 'transparent',
+                              border: submitted && isChecked && !isCorrect ? '1px solid #f44336' : 'none',
+                              transition: 'all 0.2s',
+                            }}
+                          />
+                        </motion.div>
+                      )
+                    })}
+                  </FormGroup>
+                  {/* Explanation after submission */}
+                  {submitted && currentQuestion.explanation && (
+                    <ExplanationBox explanation={currentQuestion.explanation} />
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
+          </motion.div>
         </AnimatePresence>
+
+        {/* Navigation Buttons - Sticky on Mobile */}
+        <Box
+          sx={{
+            width: '100%',
+            maxWidth: 700,
+            position: { xs: 'fixed', md: 'static' },
+            bottom: { xs: 0, md: 'auto' },
+            left: { xs: 0, md: 'auto' },
+            bgcolor: { xs: 'background.paper', md: 'transparent' },
+            boxShadow: { xs: '0 -2px 16px rgba(0,0,0,0.08)', md: 'none' },
+            borderTop: { xs: '1px solid #e0e0e0', md: 'none' },
+            py: 2,
+            px: { xs: 2, md: 0 },
+            zIndex: 1200,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 2,
+            mt: { md: 2 },
+          }}
+        >
+          <LoadingButton
+            variant="outlined"
+            onClick={() => navigateQuestion('prev')}
+            disabled={currentQuestionIndex === 0 || submitted}
+            loading={autoSubmitting}
+            startIcon={<NavigateBeforeIcon />}
+            sx={{
+              px: 4,
+              py: 1.5,
+              borderRadius: 3,
+              fontWeight: 600,
+            }}
+          >
+            Previous
+          </LoadingButton>
+          {isLastQuestion ? (
+            <LoadingButton
+              variant="contained"
+              color="primary"
+              onClick={handleSubmitClick}
+              disabled={!user || !quizId || !quiz || !questions.length || loading || autoSubmitting}
+              loading={autoSubmitting}
+              endIcon={<DoneAllIcon />}
+              sx={{
+                px: 4,
+                py: 1.5,
+                borderRadius: 3,
+                fontWeight: 600,
+                boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)',
+              }}
+            >
+              Submit Quiz
+            </LoadingButton>
+          ) : (
+            <LoadingButton
+              variant="contained"
+              onClick={() => navigateQuestion('next')}
+              disabled={submitted}
+              loading={autoSubmitting}
+              endIcon={<NavigateNextIcon />}
+              sx={{
+                px: 4,
+                py: 1.5,
+                borderRadius: 3,
+                fontWeight: 600,
+                boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)',
+              }}
+            >
+              Next
+            </LoadingButton>
+          )}
+        </Box>
       </Box>
-    </motion.div>
+
+      {/* Confirmation Dialog */}
+      <Dialog 
+        open={confirmDialogOpen} 
+        onClose={() => setConfirmDialogOpen(false)}
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            p: 1
+          }
+        }}
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 600 }}>
+          <SendIcon color="primary" />
+          Confirm Submission
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            You've answered {answeredCount} out of {questions.length} questions.
+            {answeredCount < questions.length && (
+              <Box component="span" color="error.main" fontWeight={600}>
+                {' '}You have {questions.length - answeredCount} unanswered questions.
+              </Box>
+            )}
+          </DialogContentText>
+          <DialogContentText sx={{ mt: 2 }}>
+            You've marked {markedForReview.length} questions for review.
+          </DialogContentText>
+          <DialogContentText sx={{ mt: 2 }}>
+            Are you sure you want to submit your quiz?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={() => setConfirmDialogOpen(false)}
+            sx={{ borderRadius: 2, fontWeight: 600 }}
+          >
+            Cancel
+          </Button>
+          <LoadingButton 
+            onClick={confirmSubmission} 
+            variant="contained"
+            loading={autoSubmitting}
+            sx={{ borderRadius: 2, fontWeight: 600 }}
+            startIcon={<SendIcon />}
+          >
+            Submit
+          </LoadingButton>
+        </DialogActions>
+      </Dialog>
+
+      {/* Time Up Dialog */}
+      <Dialog 
+        open={timeUpDialogOpen}
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            p: 1
+          }
+        }}
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 600 }}>
+          <TimerIcon color="error" />
+          Time's Up!
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Your quiz is being automatically submitted. Please wait...
+          </DialogContentText>
+          <Box display="flex" justifyContent="center" mt={3}>
+            <CircularProgress size={60} thickness={4} />
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Error Alert */}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: ANIMATION_DURATION }}
+          >
+            <Alert 
+              severity="error" 
+              onClose={() => setError(null)}
+              sx={{ 
+                position: 'fixed', 
+                bottom: 20, 
+                right: 20, 
+                minWidth: 300,
+                boxShadow: 3,
+                borderRadius: 3,
+                border: '1px solid rgba(211, 47, 47, 0.2)'
+              }}
+            >
+              <Typography fontWeight={600}>{error}</Typography>
+            </Alert>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Box>
   )
 }

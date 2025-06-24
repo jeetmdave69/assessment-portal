@@ -49,6 +49,25 @@ export default function StudentDashboardPage() {
   const [codeLoading, setCodeLoading] = useState(false);
   const [tab, setTab] = useState(0);
 
+  // Move quiz classification variables above useEffect hooks
+  const now = new Date();
+  const classify = (q: any): 'live' | 'upcoming' | 'completed' | 'expired' => {
+    const start = new Date(q.start_time);
+    const end = new Date(q.end_time);
+    const done = (userAttempts[q.id] || 0) >= (q.max_attempts || 1);
+    if (done) return 'completed';
+    if (now > end) return 'expired';
+    if (now < start) return 'upcoming';
+    return 'live';
+  };
+  const liveQuizzes = allQuizzes.filter((q) => classify(q) === 'live');
+  const upcomingQuizzes = allQuizzes.filter((q) => classify(q) === 'upcoming');
+  const completedQuizzes = allQuizzes.filter((q) => ['completed', 'expired'].includes(classify(q)));
+  const currentCompleted = completedQuizzes.slice(
+    (completedPage - 1) * COMPLETED_PAGE_SIZE,
+    completedPage * COMPLETED_PAGE_SIZE
+  );
+
   useEffect(() => {
     setMounted(true);
     fetchQuizzes();
@@ -62,6 +81,14 @@ export default function StudentDashboardPage() {
     });
     setAvailableTests(avail.length);
   }, [allQuizzes, userAttempts]);
+
+  // Move this useEffect below liveQuizzes declaration
+  useEffect(() => {
+    if (typeof window === 'undefined' || !liveQuizzes.length) return;
+    liveQuizzes.forEach((q) => {
+      if (router.prefetch) router.prefetch(`/attempt-quiz/${q.id}`);
+    });
+  }, [liveQuizzes, router]);
 
   const fetchQuizzes = async () => {
     if (!user) return;
@@ -77,17 +104,6 @@ export default function StudentDashboardPage() {
     const counts: Record<number, number> = {};
     ids.forEach((id) => (counts[id] = data?.filter((a) => a.quiz_id === id).length ?? 0));
     setUserAttempts(counts);
-  };
-
-  const now = new Date();
-  const classify = (q: any): 'live' | 'upcoming' | 'completed' | 'expired' => {
-    const start = new Date(q.start_time);
-    const end = new Date(q.end_time);
-    const done = (userAttempts[q.id] || 0) >= (q.max_attempts || 1);
-    if (done) return 'completed';
-    if (now > end) return 'expired';
-    if (now < start) return 'upcoming';
-    return 'live';
   };
 
   const handleAccessCodeSubmit = async () => {
@@ -111,14 +127,6 @@ export default function StudentDashboardPage() {
       setCodeLoading(false);
     }
   };
-
-  const liveQuizzes = allQuizzes.filter((q) => classify(q) === 'live');
-  const upcomingQuizzes = allQuizzes.filter((q) => classify(q) === 'upcoming');
-  const completedQuizzes = allQuizzes.filter((q) => ['completed', 'expired'].includes(classify(q)));
-  const currentCompleted = completedQuizzes.slice(
-    (completedPage - 1) * COMPLETED_PAGE_SIZE,
-    completedPage * COMPLETED_PAGE_SIZE
-  );
 
   if (!mounted || !user) return null;
 
