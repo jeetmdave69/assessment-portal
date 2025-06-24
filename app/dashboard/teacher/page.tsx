@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense, lazy } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   AppBar,
@@ -8,21 +8,23 @@ import {
   Button,
   CircularProgress,
   Container,
-  Divider,
   Grid,
   Stack,
   Toolbar,
   Typography,
+  Tabs,
+  Tab,
 } from '@mui/material';
 
 import { useClerk, useUser } from '@clerk/nextjs';
 
 import AppWelcome from '@/sections/overview/app-welcome';
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
-import QuizTable from '@/components/dashboard/QuizTable';
-import QuizAnalytics from '@/components/dashboard/QuizAnalytics';
 import { ThemeToggleButton } from '@/components/ThemeToggleButton';
 import { supabase } from '@/utils/supabaseClient';
+
+const LazyQuizTable = lazy(() => import('@/components/dashboard/QuizTable'));
+const LazyQuizAnalytics = lazy(() => import('@/components/dashboard/QuizAnalytics'));
 
 export interface Quiz {
   id: number;
@@ -44,6 +46,7 @@ export default function TeacherDashboardPage() {
   const [upcomingTests, setUpcomingTests] = useState(0);
   const [pastTests, setPastTests] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState(0);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -105,7 +108,6 @@ export default function TeacherDashboardPage() {
 
   return (
     <Box>
-      {/* Header Bar */}
       <AppBar position="static" color="default" elevation={1}>
         <Toolbar sx={{ display: 'flex', justifyContent: 'space-between' }}>
           <Typography variant="h6" fontWeight={700} color="text.primary">
@@ -121,82 +123,78 @@ export default function TeacherDashboardPage() {
       </AppBar>
 
       <Container maxWidth="xl" sx={{ pt: 4, pb: 6 }}>
-        {/* Welcome and Action Button */}
-        <Grid container spacing={3} alignItems="center" justifyContent="space-between">
-          <Grid item xs={12} md={8}>
-            <AppWelcome
-              title={`Welcome, ${user?.firstName || 'Teacher'}!`}
-              description="Create, manage, and track your quizzes from this dashboard."
-            />
-          </Grid>
-          <Grid item xs={12} md={4} display="flex" justifyContent="flex-end">
-            <Button
-              onClick={() => router.push('/create-quiz')}
-              variant="contained"
-              color="primary"
-              sx={{
-                px: 4,
-                py: 1.75,
-                fontWeight: 600,
-                borderRadius: 2,
-                minWidth: { xs: '100%', md: 180 },
-                boxShadow: 3,
-              }}
-              fullWidth
-            >
-              + CREATE NEW QUIZ
-            </Button>
-          </Grid>
-        </Grid>
+        <Tabs value={tab} onChange={(_, newTab) => setTab(newTab)} sx={{ mb: 4 }}>
+          <Tab label="Overview" />
+          <Tab label="My Quizzes" />
+        </Tabs>
 
-        {/* Section: Quiz Stats */}
-        <Typography variant="h6" fontWeight={700} mt={6} mb={2}>
-          Test Overview
-        </Typography>
-        <Grid container spacing={3}>
-          <Grid item xs={12} sm={6} md={4}>
-            <AppWidgetSummary
-              title="Active Tests"
-              total={activeTests}
-              icon="mdi:file-document-edit"
-              color="success"
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={4}>
-            <AppWidgetSummary
-              title="Upcoming Tests"
-              total={upcomingTests}
-              icon="mdi:calendar-clock"
-              color="info"
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={4}>
-            <AppWidgetSummary
-              title="Past Tests"
-              total={pastTests}
-              icon="mdi:history"
-              color="warning"
-            />
-          </Grid>
-        </Grid>
+        {tab === 0 && (
+          <>
+            <Grid container spacing={3} alignItems="center" justifyContent="space-between">
+              <Grid item xs={12} md={8}>
+                <AppWelcome
+                  title={`Welcome, ${user?.firstName || 'Teacher'}!`}
+                  description="Create, manage, and track your quizzes from this dashboard."
+                  role="teacher"
+                  showCreateQuizButton={true}
+                  createQuizAction={() => router.push('/create-quiz')}
+                />
+              </Grid>
+            </Grid>
 
-        <Divider sx={{ my: 5 }} />
+            <Typography variant="h6" fontWeight={700} mt={6} mb={2}>
+              Test Overview
+            </Typography>
+            <Grid container spacing={3}>
+              <Grid item xs={12} sm={6} md={4}>
+                <AppWidgetSummary
+                  title="Active Tests"
+                  total={activeTests}
+                  icon="mdi:file-document-edit"
+                  color="success"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <AppWidgetSummary
+                  title="Upcoming Tests"
+                  total={upcomingTests}
+                  icon="mdi:calendar-clock"
+                  color="info"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <AppWidgetSummary
+                  title="Past Tests"
+                  total={pastTests}
+                  icon="mdi:history"
+                  color="warning"
+                />
+              </Grid>
+            </Grid>
 
-        {/* Section: Quiz Table */}
-        <Typography variant="h6" fontWeight={700} mb={2}>
-          Your Quizzes
-        </Typography>
-        <Box boxShadow={1} p={2} borderRadius={2} bgcolor="background.paper">
-          <QuizTable quizzes={quizzes} />
-        </Box>
+            <Typography variant="h6" fontWeight={700} mt={6} mb={2}>
+              Performance Analytics
+            </Typography>
+            <Box boxShadow={1} p={2} borderRadius={2} bgcolor="background.paper">
+              <Suspense fallback={<CircularProgress />}>
+                <LazyQuizAnalytics />
+              </Suspense>
+            </Box>
+          </>
+        )}
 
-        {/* Section: Quiz Analytics */}
-        <Typography variant="h6" fontWeight={700} mt={6} mb={2}>
-          Performance Analytics
-        </Typography>
-        <Box boxShadow={1} p={2} borderRadius={2} bgcolor="background.paper">
-          <QuizAnalytics />
-        </Box>
+        {tab === 1 && (
+          <>
+            <Typography variant="h6" fontWeight={700} mb={2}>
+              Your Quizzes
+            </Typography>
+            <Box boxShadow={1} p={2} borderRadius={2} bgcolor="background.paper">
+              <Suspense fallback={<CircularProgress />}>
+                <LazyQuizTable quizzes={quizzes} />
+              </Suspense>
+            </Box>
+          </>
+        )}
       </Container>
     </Box>
   );

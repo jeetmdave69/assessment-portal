@@ -3,7 +3,7 @@
 import { Card, Typography, Box, Stack, Button } from '@mui/material';
 import { useUser } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 
 type AppWelcomeProps = {
   title?: string;
@@ -39,6 +39,13 @@ export default function AppWelcome({
       ? showCreateQuizButton
       : role === 'teacher';
 
+  // Prefetch the create-quiz page for instant navigation
+  useEffect(() => {
+    if (router.prefetch) {
+      router.prefetch('/create-quiz');
+    }
+  }, [router]);
+
   return (
     <Card
       sx={{
@@ -49,7 +56,9 @@ export default function AppWelcome({
         py: { xs: 4, sm: 5 },
         boxShadow: 6,
         minHeight: 200,
+        maxWidth: { xs: '100%', md: 1200 },
         width: '100%',
+        alignSelf: 'center',
         backgroundColor: 'grey.900',
         color: 'white',
       }}
@@ -97,18 +106,30 @@ export default function AppWelcome({
         {shouldShowCreateButton && (
           <Button
             variant="contained"
-            color="primary"
+            color="success"
             onClick={handleCreateQuiz}
             disableElevation
             sx={{
               width: 'fit-content',
-              px: 3,
-              py: 1,
+              px: 2.5,
+              py: 0.75,
               mt: 1,
               fontWeight: 'bold',
-              borderRadius: 2,
-              zIndex: 2,
+              borderRadius: 3,
+              fontSize: '1rem',
+              background: 'linear-gradient(90deg, #43e97b 0%, #38f9d7 100%)',
+              boxShadow: '0 2px 8px rgba(56, 249, 215, 0.10)',
+              transition: 'all 0.2s cubic-bezier(.4,0,.2,1)',
+              textTransform: 'none',
+              '&:hover': {
+                background: 'linear-gradient(90deg, #38f9d7 0%, #43e97b 100%)',
+                boxShadow: '0 4px 16px rgba(56, 249, 215, 0.18)',
+                transform: 'translateY(-2px) scale(1.03)',
+              },
             }}
+            startIcon={
+              <span style={{ fontWeight: 'bold', fontSize: 18, marginTop: 1 }}>+</span>
+            }
           >
             Create Quiz
           </Button>

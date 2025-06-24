@@ -9,7 +9,6 @@ import { supabase } from '@/utils/supabaseClient';
 import AppWidgetSummary from '@/sections/overview/app-widget-summary';
 import AppWelcome from '@/sections/overview/app-welcome';
 import { ThemeToggleButton } from '@/components/ThemeToggleButton';
-import DevRoleSwitcher from '@/components/DevRoleSwitcher';
 
 interface QuizData {
   id: string;
@@ -49,7 +48,6 @@ export default function AdminDashboardPage() {
         />
         <Box display="flex" gap={2}>
           <ThemeToggleButton />
-          <DevRoleSwitcher />
         </Box>
       </Box>
 

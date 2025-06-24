@@ -1,16 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
   Box,
   Typography,
   Paper,
   CircularProgress,
   Chip,
+  Button,
 } from '@mui/material';
 import { motion } from 'framer-motion';
 import { supabase } from '@/utils/supabaseClient';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
 interface Option {
   text: string;
@@ -34,6 +36,7 @@ interface Quiz {
 export default function PreviewQuizPage() {
   const params = useParams();
   const quizId = Array.isArray(params?.quizId) ? params.quizId[0] : params?.quizId;
+  const router = useRouter();
 
   const [quiz, setQuiz] = useState<Quiz | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -95,6 +98,14 @@ export default function PreviewQuizPage() {
         minHeight: '100vh',
       }}
     >
+      <Button
+        variant="outlined"
+        startIcon={<ArrowBackIcon />}
+        sx={{ mb: 3, fontWeight: 600, borderRadius: 2 }}
+        onClick={() => router.push('/dashboard')}
+      >
+        Back to Dashboard
+      </Button>
       <Typography variant="h3" fontWeight="bold" gutterBottom>
         Preview Quiz: {quiz.title}
       </Typography>
