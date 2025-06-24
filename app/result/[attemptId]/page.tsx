@@ -36,45 +36,50 @@ export default function ResultPage() {
   const [quizTitle, setQuizTitle] = useState('');
   const [showBackWarning, setShowBackWarning] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(true);
 
+  // Fetch attempt and quiz summary first
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchSummary = async () => {
       if (!attemptId || isNaN(attemptId)) return;
-
+      setLoading(true);
       const { data: attemptData } = await supabase
         .from('attempts')
-        .select('*')
+        .select('id,quiz_id,user_name,score,correct_answers,answers')
         .eq('id', attemptId)
         .single();
-
       if (!attemptData) {
         setLoading(false);
         return;
       }
-
-      if (!attemptData.completed_at) {
-        const now = new Date().toISOString();
-        await supabase.from('attempts').update({ completed_at: now }).eq('id', attemptId);
-        attemptData.completed_at = now;
-      }
-
       const { data: quiz } = await supabase
         .from('quizzes')
-        .select('*')
+        .select('quiz_title')
         .eq('id', attemptData.quiz_id)
         .single();
+      setQuizTitle(quiz?.quiz_title || 'Untitled Quiz');
+      setAttempt({
+        ...attemptData,
+        answers: typeof attemptData.answers === 'string' ? JSON.parse(attemptData.answers || '{}') : attemptData.answers || {},
+        correct_answers: typeof attemptData.correct_answers === 'string' ? JSON.parse(attemptData.correct_answers || '{}') : attemptData.correct_answers || {},
+      });
+      setLoading(false);
+    };
+    fetchSummary();
+  }, [attemptId]);
 
+  // Fetch questions for review in background
+  useEffect(() => {
+    if (!attempt || !attempt.quiz_id) return;
+    setReviewLoading(true);
+    const fetchQuestions = async () => {
       const { data: questionData } = await supabase
         .from('questions')
-        .select('*')
-        .eq('quiz_id', attemptData.quiz_id);
-
+        .select('id,question_text,options,correct_answers,explanation')
+        .eq('quiz_id', attempt.quiz_id);
       const parsedQuestions = (questionData || []).map((q: any) => {
-        // Check if options is already an object, if not parse it
         const options = typeof q.options === 'string' ? JSON.parse(q.options || '[]') : q.options || [];
-        // Check if correct_answers is already an object, if not parse it
         const correct = typeof q.correct_answers === 'string' ? JSON.parse(q.correct_answers || '[]') : q.correct_answers || [];
-
         return {
           id: q.id,
           question_text: q.question_text,
@@ -82,26 +87,17 @@ export default function ResultPage() {
           options: options.map((opt: any) => {
             const text = typeof opt === 'string' ? opt : opt?.text || '';
             const isCorrect = correct.some(
-              (c: any) =>
-                (typeof c === 'string' ? c.trim() : c?.text?.trim()) === text.trim()
+              (c: any) => (typeof c === 'string' ? c.trim() : c?.text?.trim()) === text.trim()
             );
             return { text, isCorrect };
           }),
         };
       });
-
-      setQuizTitle(quiz?.quiz_title || 'Untitled Quiz');
-      setAttempt({
-        ...attemptData,
-        answers: typeof attemptData.answers === 'string' ? JSON.parse(attemptData.answers || '{}') : attemptData.answers || {},
-        correct_answers: typeof attemptData.correct_answers === 'string' ? JSON.parse(attemptData.correct_answers || '{}') : attemptData.correct_answers || {},
-      });
       setQuestions(parsedQuestions);
-      setLoading(false);
+      setReviewLoading(false);
     };
-
-    fetchData();
-  }, [attemptId]);
+    fetchQuestions();
+  }, [attempt]);
 
   useEffect(() => {
     window.history.pushState(null, '', window.location.href);
@@ -139,7 +135,8 @@ export default function ResultPage() {
     );
   }
 
-  const total = questions.length;
+  // Show summary instantly
+  const total = Object.keys(attempt.correct_answers || {}).length;
   const score = attempt?.score ?? 0;
   const isPassed = total > 0 && (score / total) * 100 >= PASS_THRESHOLD;
 
@@ -182,116 +179,103 @@ export default function ResultPage() {
             </Stack>
           </Paper>
 
-          {/* Questions Review */}
+          {/* Questions Review - load lazily */}
           <Typography variant="h5" fontWeight={700} mb={2} color="primary.main">
             Review Your Answers
           </Typography>
-          <Stack spacing={3}>
-            {questions.map((q, idx) => {
-              const userAns = attempt.answers?.[q.id] ?? [];
-              const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
-              const correctAns = attempt.correct_answers?.[q.id] ?? [];
-              const correctAnswers = Array.isArray(correctAns) ? correctAns.map(normalize) : [normalize(correctAns)];
-              const isCorrect =
-                userAnswers.length === correctAnswers.length &&
-                userAnswers.every((ans) => correctAnswers.includes(ans));
-              return (
-                <motion.div
-                  key={q.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: idx * 0.07 }}
-                >
-                  <Card
-                    elevation={3}
-                    sx={{
-                      my: 1,
-                      backgroundColor: isCorrect ? '#e8f5e9' : '#ffebee',
-                      borderLeft: `6px solid ${isCorrect ? '#388e3c' : '#d32f2f'}`,
-                      borderRadius: 2,
-                      boxShadow: 3,
-                    }}
+          {reviewLoading ? (
+            <Box display="flex" alignItems="center" justifyContent="center" minHeight={200}>
+              <CircularProgress />
+              <Typography sx={{ ml: 2 }}>Loading detailed review...</Typography>
+            </Box>
+          ) : (
+            <Stack spacing={3}>
+              {questions.map((q, idx) => {
+                const userAns = attempt.answers?.[q.id] ?? [];
+                const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
+                const correctAns = attempt.correct_answers?.[q.id] ?? [];
+                const correctAnswers = Array.isArray(correctAns) ? correctAns.map(normalize) : [normalize(correctAns)];
+                const isCorrect =
+                  userAnswers.length === correctAnswers.length &&
+                  userAnswers.every((ans) => correctAnswers.includes(ans));
+                return (
+                  <motion.div
+                    key={q.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.4, delay: idx * 0.05 }}
                   >
-                    <CardContent>
-                      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-                        <Typography variant="subtitle1" fontWeight="bold">
-                          Q{idx + 1}. {q.question_text}
-                        </Typography>
-                        <Chip
-                          label={isCorrect ? 'Correct' : 'Incorrect'}
-                          sx={{
-                            backgroundColor: isCorrect ? '#388e3c' : '#d32f2f',
-                            color: '#fff',
-                            fontWeight: 'bold',
-                          }}
-                          icon={isCorrect ? <Check size={18} color="white" /> : <X size={18} color="white" />}
-                        />
-                      </Stack>
-                      <Stack spacing={1}>
-                        {q.options.map((opt: any, i: number) => {
-                          const selected = userAnswers.includes(normalize(opt.text));
-                          return (
-                            <Paper
-                              key={i}
-                              sx={{
-                                p: 1.5,
-                                my: 0.5,
-                                backgroundColor: selected
-                                  ? opt.isCorrect
-                                    ? '#c8e6c9'
-                                    : '#ffcdd2'
-                                  : opt.isCorrect
-                                  ? '#bbdefb'
-                                  : '#fafafa',
-                                border: '1px solid',
-                                borderColor: selected
-                                  ? opt.isCorrect
-                                    ? '#388e3c'
-                                    : '#d32f2f'
-                                  : opt.isCorrect
-                                  ? '#1976d2'
-                                  : '#e0e0e0',
-                                borderRadius: 1,
-                              }}
-                            >
-                              <Typography>
-                                {opt.text}
-                                {opt.isCorrect && (
-                                  <Box component="span" ml={1} color="success.main" fontWeight="bold">
-                                    ✓
-                                  </Box>
-                                )}
-                                {selected && !opt.isCorrect && (
-                                  <Box component="span" ml={1} color="error.main" fontWeight="bold">
-                                    ✗
-                                  </Box>
-                                )}
-                              </Typography>
-                            </Paper>
-                          );
-                        })}
-                      </Stack>
-                      {q.explanation && (
-                        <Typography variant="body2" mt={1.5} fontStyle="italic" color="text.secondary">
-                          Explanation: {q.explanation}
-                        </Typography>
-                      )}
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              );
-            })}
-          </Stack>
+                    <Card
+                      elevation={3}
+                      sx={{
+                        my: 1,
+                        backgroundColor: isCorrect ? '#e8f5e9' : '#ffebee',
+                        borderLeft: `6px solid ${isCorrect ? '#388e3c' : '#d32f2f'}`,
+                        borderRadius: 2,
+                        boxShadow: 3,
+                      }}
+                    >
+                      <CardContent>
+                        <Stack direction="row" alignItems="center" spacing={2}>
+                          <Typography variant="h6" fontWeight={700} color={isCorrect ? 'success.main' : 'error.main'}>
+                            Q{idx + 1}
+                          </Typography>
+                          <Typography variant="body1" fontWeight={600} color="text.primary">
+                            {q.question_text}
+                          </Typography>
+                        </Stack>
+                        <Stack spacing={1} mt={1}>
+                          {q.options.map((opt: any, i: number) => {
+                            const selected = userAnswers.includes(normalize(opt.text));
+                            return (
+                              <Paper
+                                key={i}
+                                variant="outlined"
+                                sx={{
+                                  p: 1.2,
+                                  pl: 2,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  background: selected ? (opt.isCorrect ? '#c8e6c9' : '#ffcdd2') : 'inherit',
+                                  borderColor: opt.isCorrect ? 'success.main' : selected ? 'error.main' : 'divider',
+                                }}
+                              >
+                                <Typography>
+                                  {opt.text}
+                                  {opt.isCorrect && (
+                                    <Box component="span" ml={1} color="success.main" fontWeight="bold">
+                                      ✓
+                                    </Box>
+                                  )}
+                                  {selected && !opt.isCorrect && (
+                                    <Box component="span" ml={1} color="error.main" fontWeight="bold">
+                                      ✗
+                                    </Box>
+                                  )}
+                                </Typography>
+                              </Paper>
+                            );
+                          })}
+                        </Stack>
+                        {q.explanation && (
+                          <Typography variant="body2" mt={1.5} fontStyle="italic" color="text.secondary">
+                            Explanation: {q.explanation}
+                          </Typography>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                );
+              })}
+            </Stack>
+          )}
 
           <Box mt={6} display="flex" justifyContent="center">
             <Button
               variant="contained"
               color="primary"
               sx={{ px: 4, py: 1.5, borderRadius: 2, fontWeight: 'bold', textTransform: 'none', boxShadow: 3 }}
-              onClick={() => {
-                setRedirecting(true);
-                setTimeout(() => router.push('/'), 300); // Small delay for smoothness
-              }}
+              onClick={() => router.push('/')}
             >
               Back to Dashboard
             </Button>

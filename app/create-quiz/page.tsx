@@ -407,18 +407,18 @@ export default function CreateQuizPage() {
         <Accordion
           expanded={expandedIndex === i}
           onChange={() => setExpandedIndex(expandedIndex === i ? -1 : i)}
-          sx={{ borderRadius: 3, boxShadow: 4, mb: 1, transition: 'box-shadow 0.2s', border: '1.5px solid', borderColor: 'divider', bgcolor: 'background.paper' }}
+          sx={{ borderRadius: 3, boxShadow: 2, mb: 1, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}
           id={`question-accordion-${i}`}
         >
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Box sx={{ flex: 1 }}>
               <Stack direction="row" alignItems="center" spacing={2}>
-                <Chip label={`Question ${i + 1}`} color="primary" size="medium" sx={{ fontWeight: 700, fontSize: '1.1rem' }} />
+                <Chip label={`Question ${i + 1}`} variant="outlined" size="medium" sx={{ fontWeight: 600, fontSize: '1.05rem', bgcolor: 'background.paper', color: 'text.primary', borderColor: 'grey.400' }} />
                 <Typography fontWeight={600} sx={{ color: 'text.primary' }}>{watch(`questions.${i}.question`) || `Question ${i + 1}`}</Typography>
               </Stack>
               <Stack direction="row" spacing={1} alignItems="center" mt={1}>
-                <Chip label={watch(`questions.${i}.questionType`) === 'multiple' ? 'Multiple' : 'Single'} color="info" size="small" />
-                <Chip label={`Marks: ${watch(`questions.${i}.marks`)}`} color="secondary" size="small" />
+                <Chip label={watch(`questions.${i}.questionType`) === 'multiple' ? 'Multiple' : 'Single'} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
+                <Chip label={`Marks: ${watch(`questions.${i}.marks`)}`} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
               </Stack>
             </Box>
             <Stack direction="row" spacing={1}>
@@ -669,7 +669,7 @@ export default function CreateQuizPage() {
                 </Paper>
 
                 {/* Question Navigation Bar */}
-                <Paper elevation={2} sx={{ p: 2, borderRadius: 2, mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', bgcolor: 'background.paper', boxShadow: 2 }}>
+                <Paper elevation={2} sx={{ p: 2, borderRadius: 2, mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', bgcolor: 'background.paper', boxShadow: 1 }}>
                   {questionFields.map((q, i) => {
                     const qVal = watch(`questions.${i}`);
                     const isComplete = qVal && qVal.question && qVal.options && qVal.options.length >= 2 && qVal.options.every((opt: any) => opt.text);
@@ -677,15 +677,15 @@ export default function CreateQuizPage() {
                       <Chip
                         key={q.id}
                         label={`Q${i + 1}`}
-                        color={isComplete ? 'primary' : 'warning'}
-                        variant={i === 0 ? 'filled' : 'outlined'}
+                        variant={expandedIndex === i ? 'filled' : 'outlined'}
+                        color="default"
                         clickable
                         onClick={() => {
                           setExpandedIndex(i);
                           const el = document.getElementById(`question-accordion-${i}`);
                           if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         }}
-                        sx={{ fontWeight: 600, fontSize: '1rem', mx: 0.5, my: 0.5, boxShadow: isComplete ? 2 : 0 }}
+                        sx={{ fontWeight: 500, fontSize: '0.98rem', mx: 0.5, my: 0.5, bgcolor: 'background.paper', color: 'text.primary', borderColor: 'grey.400', boxShadow: 0 }}
                       />
                     );
                   })}
