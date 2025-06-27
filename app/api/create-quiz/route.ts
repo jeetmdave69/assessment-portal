@@ -143,6 +143,7 @@ export async function POST(req: NextRequest) {
           image: q.image || null,
           explanation: q.explanation || '',
           marks: parseInt(q.marks) || 1,
+          section_id: q.section_id,
         }])
         .select()
         .single();

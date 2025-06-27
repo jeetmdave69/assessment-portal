@@ -13,12 +13,6 @@ const nextConfig = {
     };
     return config;
   },
-  webpackDevMiddleware: config => {
-    config.watchOptions = {
-      ignored: ['**/node_modules', '**/.next', '**/public/assets', '**/src/_mock'],
-    };
-    return config;
-  },
 };
 
 module.exports = nextConfig;

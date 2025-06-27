@@ -8,6 +8,7 @@ import {
   Card,
   CardContent,
   Checkbox,
+  Chip,
   CircularProgress,
   Container,
   Dialog,
@@ -15,764 +16,490 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Divider,
   FormControlLabel,
   FormGroup,
+  IconButton,
   LinearProgress,
   Paper,
-  Radio,
   Stack,
-  Typography,
-  Alert,
-  Grid,
-  Skeleton,
-  Chip,
   Tooltip,
-  IconButton,
-  Divider,
-  useTheme,
-  useMediaQuery
+  Typography,
+  Radio,
+  RadioGroup,
 } from '@mui/material'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { supabase } from '@/utils/supabaseClient'
 import { useUser } from '@clerk/nextjs'
+import ErrorPopup from '@/components/ErrorPopup'
 import {
-  ArrowBack as ArrowBackIcon,
+  Flag as FlagIcon,
+  FlagOutlined as FlagOutlinedIcon,
+  Bookmark as BookmarkIcon,
+  BookmarkBorder as BookmarkBorderIcon,
+  NavigateBefore as BackIcon,
+  NavigateNext as NextIcon,
   Timer as TimerIcon,
   CheckCircle as CheckCircleIcon,
   HelpOutline as HelpOutlineIcon,
-  NavigateBefore as NavigateBeforeIcon,
-  NavigateNext as NavigateNextIcon,
-  Send as SendIcon,
-  DoneAll as DoneAllIcon,
-  EmojiEvents as EmojiEventsIcon,
-  Close as CloseIcon,
-  Flag as FlagIcon,
-  OutlinedFlag as OutlinedFlagIcon
+  Fullscreen as FullscreenIcon,
+  FullscreenExit as FullscreenExitIcon,
 } from '@mui/icons-material'
-import CryptoJS from 'crypto-js'
 
-// Types
-interface QuizOption {
+interface Option {
   text: string
-  is_correct: boolean
+  isCorrect: boolean
 }
-
 interface Question {
   id: number
   question_text: string
-  options: QuizOption[]
-  correct_answers: number[]
-  marks: number
-  explanation?: string
-  image_url?: string
-  question_type: 'single' | 'multiple'
+  options: Option[]
+  section_id: number
+  marks?: number
+  question_type: string
 }
-
 interface Quiz {
   id: number
-  quiz_title: string
+  quiz_title?: string
+  quiz_name?: string
   duration: number
   max_attempts: number
-  passing_score: number
-  show_correct_answers: boolean
-  description?: string
-  shuffle_questions: boolean
-  shuffle_options: boolean
+  passing_score?: number
 }
 
-interface QuizSessionData {
-  startTime: number
-  answers: Record<number, number[]>
-  currentQuestionIndex: number
-  quizDuration: number
-  markedForReview: number[]
+// Navigation color constants for formal, assessment-portal style
+const NAV_COLORS = {
+  attempted: '#222', // dark gray for attempted
+  unattempted: '#fff', // white for unattempted
+  current: '#e0e0e0', // light gray for current
+  flagged: '#fff', // white, but with red flag icon
+  bookmarked: '#fffbe6', // pale yellow for bookmarked
+  borderAttempted: '#222',
+  borderUnattempted: '#bbb',
+  borderCurrent: '#222',
+  borderBookmarked: '#e6b800',
 }
 
-// Constants
-const TIME_WARNING_THRESHOLD = 60
-const LOADING_DELAY = 300
-const ANIMATION_DURATION = 0.3
-const SESSION_STORAGE_KEY = 'quizSession_'
-const ENCRYPTION_SECRET = process.env.NEXT_PUBLIC_ENCRYPTION_SECRET || 'default-secret'
-const SUBMISSION_COOLDOWN = 5000 // 5 seconds
-
-// Security Utilities
-const encryptData = (data: any): string => {
-  try {
-    return CryptoJS.AES.encrypt(JSON.stringify(data), ENCRYPTION_SECRET).toString()
-  } catch (error) {
-    console.error('Encryption error:', error)
-    throw new Error('Failed to encrypt session data')
-  }
-}
-
-const decryptData = (ciphertext: string): any => {
-  try {
-    const bytes = CryptoJS.AES.decrypt(ciphertext, ENCRYPTION_SECRET)
-    return JSON.parse(bytes.toString(CryptoJS.enc.Utf8))
-  } catch (error) {
-    console.error('Decryption error:', error)
-    throw new Error('Failed to decrypt session data')
-  }
-}
-
-const validateQuestion = (question: any): Question => {
-  if (!question?.id || !question?.question_text) {
-    throw new Error('Invalid question format')
-  }
-
-  const options = Array.isArray(question.options) 
-    ? question.options.map((opt: any, index: number) => ({
-        text: opt?.text || `Option ${index + 1}`,
-        is_correct: (Array.isArray(question.correct_answers) ? question.correct_answers : []).includes(index)
-      }))
-    : []
-
-  return {
-    id: Number(question.id),
-    question_text: String(question.question_text),
-    options,
-    correct_answers: Array.isArray(question.correct_answers) 
-      ? question.correct_answers.map(Number).filter((n: number) => !isNaN(n))
-      : [],
-    marks: Number(question.marks) || 1,
-    explanation: question.explanation ? String(question.explanation) : undefined,
-    image_url: question.image_url ? String(question.image_url) : undefined,
-    question_type: question.question_type === 'multiple' ? 'multiple' : 'single'
-  }
-}
-
-const validateQuiz = (quiz: any): Quiz => {
-  if (!quiz?.id || !quiz?.quiz_title) {
-    throw new Error('Invalid quiz format')
-  }
-
-  return {
-    id: Number(quiz.id),
-    quiz_title: String(quiz.quiz_title),
-    duration: Math.max(1, Number(quiz.duration) || 30),
-    max_attempts: Math.max(0, Number(quiz.max_attempts) || 0),
-    passing_score: Math.max(0, Number(quiz.passing_score) || 0),
-    show_correct_answers: Boolean(quiz.show_correct_answers),
-    description: quiz.description ? String(quiz.description) : undefined,
-    shuffle_questions: Boolean(quiz.shuffle_questions),
-    shuffle_options: Boolean(quiz.shuffle_options)
-  }
-}
-
-// Add shuffle utility
-function shuffleArray<T>(array: T[]): T[] {
-  const arr = [...array];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-// Custom Components
-const LoadingButton = ({
-  loading,
-  children,
-  ...props
-}: {
-  loading: boolean
-  children: React.ReactNode
-  [key: string]: any
-}) => (
-  <Button
-    {...props}
-    disabled={props.disabled || loading}
-    sx={{
-      position: 'relative',
-      minWidth: 120,
-      transition: 'all 0.2s ease',
-      ...props.sx
-    }}
-  >
-    <Box
-      component="span"
-      sx={{
-        opacity: loading ? 0 : 1,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 1,
-        transition: 'opacity 0.2s ease'
-      }}
-    >
-      {children}
-    </Box>
-    {loading && (
-      <CircularProgress
-        size={24}
-        sx={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          marginTop: '-12px',
-          marginLeft: '-12px'
-        }}
-      />
-    )}
-  </Button>
-)
-
-const QuestionNavigationButton = ({
-  index,
+const QuestionButton = ({
+  idx,
   current,
-  answered,
-  marked,
-  onClick,
-  disabled
+  answers,
+  flagged,
+  questions,
+  setCurrent,
+  submitted,
+  toggleFlag,
+  bookmarked,
 }: {
-  index: number
-  current: boolean
-  answered: boolean
-  marked: boolean
-  onClick: () => void
-  disabled: boolean
+  idx: number
+  current: number
+  answers: Record<number, string[]>
+  flagged: Record<number, boolean>
+  questions: Question[]
+  setCurrent: (index: number) => void
+  submitted: boolean
+  toggleFlag: (qid: number) => void
+  bookmarked: Record<number, boolean>
 }) => {
+  const done = !!answers[questions[idx].id]
+  const isFlagged = flagged[questions[idx].id]
+  const isCurrent = idx === current
+  const isBookmarked = bookmarked[questions[idx].id]
+
+  // Determine color scheme
+  let bgcolor = NAV_COLORS.unattempted
+  let color = '#222'
+  let border = `1.5px solid ${NAV_COLORS.borderUnattempted}`
+  if (isCurrent) {
+    bgcolor = NAV_COLORS.current
+    border = `2px solid ${NAV_COLORS.borderCurrent}`
+    color = '#222'
+  } else if (isBookmarked) {
+    bgcolor = NAV_COLORS.bookmarked
+    border = `1.5px solid ${NAV_COLORS.borderBookmarked}`
+    color = '#222'
+  } else if (done) {
+    bgcolor = NAV_COLORS.attempted
+    border = `1.5px solid ${NAV_COLORS.borderAttempted}`
+    color = '#fff'
+  }
+
   return (
-    <Tooltip title={`Question ${index + 1}`} arrow>
+    <Box position="relative" sx={{ display: 'inline-block' }}>
       <Button
-        size="small"
-        variant={current ? 'contained' : answered ? 'outlined' : 'text'}
-        color={answered ? 'success' : marked ? 'warning' : 'primary'}
-        onClick={onClick}
-        disabled={disabled}
+        size="medium"
+        variant="contained"
         sx={{
           minWidth: 40,
           minHeight: 40,
-          borderRadius: '12px',
-          fontSize: '0.875rem',
-          fontWeight: current ? 700 : 500,
-          transition: 'all 0.2s ease',
-          '&:disabled': {
-            opacity: 0.5
+          borderRadius: '8px',
+          fontSize: '1rem',
+          fontWeight: isCurrent ? 700 : 500,
+          boxShadow: isCurrent ? 2 : 0,
+          border,
+          bgcolor,
+          color,
+          transition: 'all 0.2s',
+          p: 0,
+        }}
+        onClick={() => setCurrent(idx)}
+        disabled={submitted}
+      >
+        {idx + 1}
+      </Button>
+      <IconButton
+        size="small"
+        onClick={e => {
+          e.stopPropagation()
+          toggleFlag(questions[idx].id)
+        }}
+        sx={{
+          position: 'absolute',
+          top: -8,
+          right: -8,
+          zIndex: 2,
+          bgcolor: '#fff',
+          p: 0.5,
+          border: isFlagged ? '1.5px solid #d32f2f' : '1.5px solid #eee',
+          boxShadow: 1,
+          '&:hover': {
+            bgcolor: '#f5f5f5',
           },
-          position: 'relative',
-          overflow: 'hidden'
         }}
       >
-        {index + 1}
-        {marked && (
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 0,
-              right: 0,
-              width: 0,
-              height: 0,
-              borderStyle: 'solid',
-              borderWidth: '0 16px 16px 0',
-              borderColor: 'transparent #ff9800 transparent transparent'
-            }}
-          />
+        {isFlagged ? (
+          <FlagIcon sx={{ color: '#d32f2f' }} fontSize="small" />
+        ) : (
+          <FlagOutlinedIcon sx={{ color: '#bbb' }} fontSize="small" />
         )}
-      </Button>
-    </Tooltip>
-  )
-}
-
-const TimeDisplay = ({ seconds }: { seconds: number }) => {
-  const formattedTime = useMemo(() => {
-    const safeSeconds = Math.max(0, seconds)
-    const mins = Math.floor(safeSeconds / 60)
-    const secs = safeSeconds % 60
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-  }, [seconds])
-
-  const isWarning = seconds <= TIME_WARNING_THRESHOLD
-
-  return (
-    <Box display="flex" alignItems="center" gap={1}>
-      <TimerIcon color={isWarning ? 'error' : 'primary'} />
-      <Typography
-        variant="h6"
-        color={isWarning ? 'error.main' : 'primary.main'}
-        component={motion.span}
-        animate={{ scale: isWarning ? [1, 1.05, 1] : 1 }}
-        transition={{ repeat: isWarning ? Infinity : 0, duration: 1 }}
-        fontWeight={600}
-      >
-        {formattedTime}
-      </Typography>
+      </IconButton>
     </Box>
   )
 }
 
-const ExplanationBox = ({ explanation }: { explanation: string }) => (
-  <motion.div
-    initial={{ opacity: 0, height: 0 }}
-    animate={{ opacity: 1, height: 'auto' }}
-    transition={{ duration: ANIMATION_DURATION }}
-  >
-    <Box
-      sx={{
-        mt: 3,
-        p: 2.5,
-        bgcolor: 'rgba(2, 136, 209, 0.08)',
-        borderRadius: 2,
-        borderLeft: '4px solid',
-        borderColor: 'info.main'
-      }}
-    >
-      <Stack direction="row" alignItems="center" spacing={1} mb={1}>
-        <HelpOutlineIcon color="info" />
-        <Typography variant="subtitle2" color="info.dark" fontWeight={600}>
-          Explanation:
-        </Typography>
-      </Stack>
-      <Typography variant="body2" color="text.secondary">
-        {explanation}
-      </Typography>
-    </Box>
-  </motion.div>
-)
-
-export default function QuizAttemptPage() {
+export default function AttemptQuizPage() {
   const params = useParams() as { quizId?: string } | null
   const quizId = params?.quizId
   const router = useRouter()
-  const { user, isLoaded: isUserLoaded } = useUser()
-  const theme = useTheme()
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
+  const { user } = useUser()
 
-  // State
+  if (!quizId) {
+    return (
+      <Container sx={{ mt: 4 }}>
+        <Typography color="error">Invalid quiz URL – no quizId provided.</Typography>
+      </Container>
+    )
+  }
+
   const [quiz, setQuiz] = useState<Quiz | null>(null)
   const [questions, setQuestions] = useState<Question[]>([])
-  const [answers, setAnswers] = useState<Record<number, number[]>>({})
-  const [markedForReview, setMarkedForReview] = useState<number[]>([])
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
+  const [answers, setAnswers] = useState<Record<number, string[]>>({})
+  const [flagged, setFlagged] = useState<Record<number, boolean>>({})
+  const [bookmarked, setBookmarked] = useState<Record<number, boolean>>({})
+  const [current, setCurrent] = useState(0)
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [totalTime, setTotalTime] = useState(0)
   const [loading, setLoading] = useState(true)
   const [submitted, setSubmitted] = useState(false)
   const [attemptCount, setAttemptCount] = useState(0)
   const [attemptsLoading, setAttemptsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [errorPopup, setErrorPopup] = useState<string | null>(null)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [timeUpDialogOpen, setTimeUpDialogOpen] = useState(false)
   const [autoSubmitting, setAutoSubmitting] = useState(false)
-  const [quizNotFound, setQuizNotFound] = useState(false)
-  const [sessionRestored, setSessionRestored] = useState(false)
-  const [lastSubmissionAttempt, setLastSubmissionAttempt] = useState(0)
-  const [timerStartTime, setTimerStartTime] = useState<number | null>(null)
-
-  // Derived state
-  const currentQuestion = questions[currentQuestionIndex]
-  const isLastQuestion = currentQuestionIndex === questions.length - 1
-  const answeredCount = Object.keys(answers).length
-  const progress = useMemo(() => {
-    if (timeLeft === null || totalTime === 0) return 0
-    return ((totalTime - Math.max(0, timeLeft)) / totalTime) * 100
-  }, [timeLeft, totalTime])
-
-  // Session storage key
-  const sessionKey = useMemo(() => {
-    return user && quizId ? `${SESSION_STORAGE_KEY}${user.id}_${quizId}` : null
-  }, [user, quizId])
-
-  // Save session to localStorage with encryption
-  const saveSession = useCallback(() => {
-    if (!sessionKey || submitted || timeLeft === null || !quiz || !timerStartTime) return
-    
-    const sessionData: QuizSessionData = {
-      startTime: timerStartTime,
-      answers,
-      currentQuestionIndex,
-      quizDuration: quiz.duration * 60,
-      markedForReview
-    }
-    
-    try {
-      const encryptedData = encryptData(sessionData)
-      localStorage.setItem(sessionKey, encryptedData)
-    } catch (error) {
-      console.error('Failed to save session:', error)
-    }
-  }, [sessionKey, submitted, timeLeft, quiz, answers, currentQuestionIndex, markedForReview, timerStartTime])
-
-  // Load session from localStorage with decryption
-  const loadSession = useCallback(() => {
-    if (!sessionKey) return null
-    
-    try {
-      const savedData = localStorage.getItem(sessionKey)
-      if (!savedData) return null
-      
-      const sessionData = decryptData(savedData) as QuizSessionData
-      
-      if (!sessionData || typeof sessionData !== 'object') {
-        throw new Error('Invalid session data')
-      }
-      
-      const elapsedSeconds = Math.floor((Date.now() - sessionData.startTime) / 1000)
-      const remainingTime = Math.max(0, sessionData.quizDuration - elapsedSeconds)
-      
-      // If time is up, don't restore the session
-      if (remainingTime <= 0) {
-        clearSession()
-        return null
-      }
-      
-      return {
-        ...sessionData,
-        remainingTime
-      }
-    } catch (e) {
-      console.error('Failed to load session data', e)
-      clearSession()
-      return null
-    }
-  }, [sessionKey])
-
-  // Clear session from localStorage
-  const clearSession = useCallback(() => {
-    if (!sessionKey) return
-    localStorage.removeItem(sessionKey)
-  }, [sessionKey])
+  const [sections, setSections] = useState<{ id: number; name: string; code: string }[]>([])
+  const [fullscreen, setFullscreen] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  const [reviewMode, setReviewMode] = useState(false)
 
   // Anti-cheat measures
   useEffect(() => {
-    const preventCopyPaste = (e: ClipboardEvent) => {
-      e.preventDefault()
+    const killKeys = (e: KeyboardEvent) => {
+      const combo = `${e.ctrlKey ? 'Control+' : ''}${e.metaKey ? 'Meta+' : ''}${e.shiftKey ? 'Shift+' : ''}${e.key}`
+      const blocked = ['F12', 'Control+Shift+I', 'Control+Shift+J', 'Control+U', 'Control+C', 'Meta+C']
+      if (blocked.includes(combo) || e.key === 'F12') e.preventDefault()
     }
+    const killMenu = (e: MouseEvent) => e.preventDefault()
+    document.addEventListener('keydown', killKeys)
+    document.addEventListener('contextmenu', killMenu)
 
-    const preventContextMenu = (e: MouseEvent) => {
-      e.preventDefault()
-    }
-
-    const preventKeyCombos = (e: KeyboardEvent) => {
-      // Disable F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
-      if (
-        e.key === 'F12' ||
-        (e.ctrlKey && e.shiftKey && e.key === 'I') ||
-        (e.ctrlKey && e.shiftKey && e.key === 'J') ||
-        (e.ctrlKey && e.key === 'U')
-      ) {
-        e.preventDefault()
-      }
-    }
-
-    document.addEventListener('copy', preventCopyPaste)
-    document.addEventListener('cut', preventCopyPaste)
-    document.addEventListener('paste', preventCopyPaste)
-    document.addEventListener('contextmenu', preventContextMenu)
-    document.addEventListener('keydown', preventKeyCombos)
-
-    // Disable text selection
+    const prev = document.body.style.userSelect
     document.body.style.userSelect = 'none'
 
     return () => {
-      document.removeEventListener('copy', preventCopyPaste)
-      document.removeEventListener('cut', preventCopyPaste)
-      document.removeEventListener('paste', preventCopyPaste)
-      document.removeEventListener('contextmenu', preventContextMenu)
-      document.removeEventListener('keydown', preventKeyCombos)
-      document.body.style.userSelect = ''
+      document.removeEventListener('keydown', killKeys)
+      document.removeEventListener('contextmenu', killMenu)
+      document.body.style.userSelect = prev
     }
   }, [])
 
-  // Prevent page reload/exit
+  // Fetch quiz data
   useEffect(() => {
-    if (submitted) return
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      e.returnValue = 'Are you sure you want to leave? Your quiz progress will be lost.'
-      return e.returnValue
-    }
-
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [submitted])
-
-  // Fetch quiz data with improved security
-  useEffect(() => {
-    if (!isUserLoaded) return
-
-    const fetchQuizData = async () => {
-      if (!quizId || !user) {
-        setQuizNotFound(true)
-        setLoading(false)
-        return
-      }
-
+    const fetchData = async () => {
       try {
-        setLoading(true)
-        
-        const parsedQuizId = Number(quizId)
-        if (isNaN(parsedQuizId)) {
-          throw new Error('Invalid quiz ID')
-        }
+        const { data: quizData, error: quizError } = await supabase
+          .from('quizzes')
+          .select('*')
+          .eq('id', quizId)
+          .single()
 
-        const [quizResponse, questionsResponse] = await Promise.all([
-          supabase.from('quizzes').select('*').eq('id', parsedQuizId).single(),
-          supabase
-            .from('questions')
-            .select(`
-              id,
-              question_text,
-              options,
-              correct_answers,
-              marks,
-              explanation,
-              image_url,
-              question_type
-            `)
-            .eq('quiz_id', parsedQuizId)
-            .order('id', { ascending: true })
-        ])
+        if (quizError) throw quizError
 
-        if (quizResponse.error || !quizResponse.data) {
-          throw quizResponse.error || new Error('Quiz not found')
-        }
+        // Fetch sections
+        const { data: sectionData, error: sectionError } = await supabase
+          .from('sections')
+          .select('id, name, code')
+        if (sectionError) throw sectionError
+        setSections(sectionData || [])
 
-        if (questionsResponse.error) {
-          throw questionsResponse.error
-        }
+        // Fetch questions with section_id
+        const { data: questionData, error: questionError } = await supabase
+          .from('questions')
+          .select('*')
+          .eq('quiz_id', quizId)
 
-        if (!questionsResponse.data || questionsResponse.data.length === 0) {
-          throw new Error('No questions found for this quiz')
-        }
+        if (questionError) throw questionError
 
-        const validatedQuiz = validateQuiz(quizResponse.data)
-        let validatedQuestions = questionsResponse.data.map(validateQuestion)
-
-        // Shuffle questions and options for each student if enabled
-        if (validatedQuiz.shuffle_questions) {
-          validatedQuestions = shuffleArray(validatedQuestions)
-        }
-        if (validatedQuiz.shuffle_options) {
-          validatedQuestions = validatedQuestions.map(q => ({
-            ...q,
-            options: shuffleArray(q.options)
-          }))
-        }
-
-        setQuiz(validatedQuiz)
-        setQuestions(validatedQuestions)
-        const durationInSeconds = validatedQuiz.duration * 60
-        setTotalTime(durationInSeconds)
-
-        let session = loadSession()
-        if (session && session.remainingTime > 0) {
-          setTimeLeft(session.remainingTime)
-          setAnswers(session.answers)
-          setCurrentQuestionIndex(session.currentQuestionIndex)
-          setMarkedForReview(session.markedForReview || [])
-          setTimerStartTime(session.startTime)
-          setSessionRestored(true)
-        } else {
-          const startTime = Date.now()
-          setTimerStartTime(startTime)
-          setTimeLeft(durationInSeconds)
-          setAnswers({})
-          setCurrentQuestionIndex(0)
-          setMarkedForReview([])
-          setSessionRestored(true)
-          if (sessionKey) {
-            const sessionData = {
-              startTime,
-              answers: {},
-              currentQuestionIndex: 0,
-              quizDuration: durationInSeconds,
-              markedForReview: []
-            }
+        const parsed: Question[] = (questionData ?? []).map((q: any) => {
+          let correctRaw = q.correct_answers
+          if (typeof correctRaw === 'string') {
             try {
-              const encryptedData = encryptData(sessionData)
-              localStorage.setItem(sessionKey, encryptedData)
-            } catch (error) {
-              console.error('Failed to save new session:', error)
+              correctRaw = JSON.parse(correctRaw)
+            } catch {
+              correctRaw = [correctRaw]
             }
           }
+          if (!Array.isArray(correctRaw)) {
+            correctRaw = [correctRaw]
+          }
+          const correct = correctRaw.map((s: string) => (s ?? '').toString().trim().toLowerCase())
+          let raw: any[] = []
+          if (typeof q.options === 'string') {
+            try {
+              raw = JSON.parse(q.options)
+            } catch {
+              raw = []
+            }
+          } else if (Array.isArray(q.options)) {
+            raw = q.options
+          } else {
+            raw = []
+          }
+          const opts =
+            typeof raw[0] === 'string'
+              ? raw.map((t: string) => ({ text: t.trim(), isCorrect: correct.includes(t.trim().toLowerCase()) }))
+              : raw.map((o: any) => ({ text: o.text.trim(), isCorrect: correct.includes(o.text.trim().toLowerCase()) }))
+          return { 
+            id: q.id, 
+            question_text: q.question_text, 
+            options: opts, 
+            section_id: q.section_id,
+            marks: q.marks || 1,
+            question_type: q.question_type || 'multi'
+          }
+        })
+
+        setQuiz(quizData)
+        setQuestions(parsed)
+
+        // Initialize flagged questions from localStorage
+        const savedFlags = localStorage.getItem(`quiz-${quizId}-flags`)
+        if (savedFlags) {
+          setFlagged(JSON.parse(savedFlags))
         }
-      } catch (err) {
-        console.error('Quiz loading error:', err)
-        setError('Failed to load quiz. Please try again later.')
-        setQuizNotFound(true)
-        clearSession()
+
+        // Initialize bookmarked questions from localStorage
+        const savedBookmarks = localStorage.getItem(`quiz-${quizId}-bookmarks`)
+        if (savedBookmarks) {
+          setBookmarked(JSON.parse(savedBookmarks))
+        }
+
+        const secs = (quizData?.duration ?? 30) * 60
+        setTotalTime(secs)
+        setTimeLeft(secs)
+      } catch (error) {
+        console.error('Error fetching quiz data:', error)
+        setErrorPopup('Failed to load quiz data. Please try again.')
       } finally {
         setLoading(false)
       }
     }
+    fetchData()
+  }, [quizId])
 
-    fetchQuizData()
-  }, [quizId, loadSession, clearSession, isUserLoaded, user, sessionKey])
-
-  // Save session on changes
+  // Save flagged questions to localStorage
   useEffect(() => {
-    if (!sessionRestored) return
-    
-    const saveInterval = setInterval(() => {
-      saveSession()
-    }, 5000)
-    
-    return () => {
-      clearInterval(saveInterval)
-      saveSession()
+    if (quizId && Object.keys(flagged).length > 0) {
+      localStorage.setItem(`quiz-${quizId}-flags`, JSON.stringify(flagged))
     }
-  }, [sessionRestored, saveSession])
+  }, [flagged, quizId])
 
-  // Fetch attempt count with rate limiting protection
+  // Save bookmarked questions to localStorage
+  useEffect(() => {
+    if (quizId && Object.keys(bookmarked).length > 0) {
+      localStorage.setItem(`quiz-${quizId}-bookmarks`, JSON.stringify(bookmarked))
+    }
+  }, [bookmarked, quizId])
+
+  // Fetch attempt count
   useEffect(() => {
     const fetchAttempts = async () => {
-      if (!user || !quizId || !isUserLoaded) return
-      
+      if (!user) return
       try {
-        setAttemptsLoading(true)
-        
-        const parsedQuizId = Number(quizId)
-        if (isNaN(parsedQuizId)) {
-          throw new Error('Invalid quiz ID')
-        }
-
         const { data, error } = await supabase
           .from('attempts')
           .select('id')
-          .eq('quiz_id', parsedQuizId)
+          .eq('quiz_id', quizId)
           .eq('user_id', user.id)
 
         if (error) throw error
         setAttemptCount(data?.length ?? 0)
-      } catch (err) {
-        console.error('Attempts loading error:', err)
-        setError('Failed to load attempt history')
+      } catch (error) {
+        console.error('Error fetching attempts:', error)
+        setErrorPopup('Failed to load attempt history')
       } finally {
         setAttemptsLoading(false)
       }
     }
-    
     fetchAttempts()
-  }, [user, quizId, isUserLoaded])
+  }, [user, quizId])
 
-  // Timer logic
+  // Timer countdown
   useEffect(() => {
-    if (submitted || timeLeft === null || timeLeft <= 0 || !timerStartTime) return
+    if (submitted || timeLeft === null || timeLeft <= 0) return
 
     const timerId = setInterval(() => {
-      const elapsedSeconds = Math.floor((Date.now() - timerStartTime) / 1000)
-      const remainingTime = Math.max(0, totalTime - elapsedSeconds)
-      
-      setTimeLeft(remainingTime)
-      
-      if (remainingTime <= 0) {
-        clearInterval(timerId)
-        handleTimeout()
-      }
+      setTimeLeft(prev => {
+        if (prev === null || prev <= 0) {
+          clearInterval(timerId)
+          return 0
+        }
+        return prev - 1
+      })
     }, 1000)
 
     return () => clearInterval(timerId)
-  }, [submitted, timeLeft, totalTime, timerStartTime])
+  }, [submitted, timeLeft])
 
-  // Handlers with improved security
-  const handleAnswerChange = useCallback((questionId: number, optionIndex: number) => {
-    setAnswers(prev => {
-      const question = questions.find(q => q.id === questionId)
-      if (!question) return prev
-      
-      const isSingle = question.question_type === 'single'
-      const prevAnswer = prev[questionId] || []
-      
-      const newAnswers = {
-        ...prev,
-        [questionId]: isSingle 
-          ? [optionIndex]
-          : prevAnswer.includes(optionIndex)
-            ? prevAnswer.filter(i => i !== optionIndex)
-            : [...prevAnswer, optionIndex]
-      }
-      
-      return newAnswers
-    })
-  }, [questions])
+  // Handle timeout when time reaches 0
+  useEffect(() => {
+    if (timeLeft === 0 && !submitted) {
+      handleTimeout()
+    }
+  }, [timeLeft, submitted])
 
-  const toggleMarkForReview = useCallback((questionId: number) => {
-    setMarkedForReview(prev => 
-      prev.includes(questionId)
-        ? prev.filter(id => id !== questionId)
-        : [...prev, questionId]
-    )
-  }, [])
-
-  const buildSubmissionPayload = () => {
-    let score = 0
-    const userAnswers: Record<number, number[]> = {}
-    const correctAnswersMap: Record<number, number[]> = {}
-
-    questions.forEach(question => {
-      const userAnswer = answers[question.id] || []
-      userAnswers[question.id] = userAnswer
-      correctAnswersMap[question.id] = question.correct_answers
-
-      if (userAnswer.length === question.correct_answers.length && 
-          userAnswer.every(a => question.correct_answers.includes(a))) {
-        score += question.marks
-      }
-    })
-
-    return { userAnswers, correctAnswersMap, score }
+  const formatTime = (s: number) => {
+    const safe = Math.max(0, s ?? 0)
+    return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`
   }
 
-  const submitQuizAttempt = async () => {
-    // Guard: Prevent submission if required data is missing
-    if (!user || !quizId || !quiz || !questions.length) {
-      console.error('Submission blocked: missing user, quizId, quiz, or questions', { user, quizId, quiz, questions });
-      throw new Error('Quiz is not fully loaded. Please wait and try again.');
-    }
-    const now = Date.now()
-    if (now - lastSubmissionAttempt < SUBMISSION_COOLDOWN) {
-      throw new Error('Please wait before submitting again')
-    }
-    setLastSubmissionAttempt(now)
+  const progress = useMemo(() => {
+    if (timeLeft === null || totalTime === 0) return 0
+    const safeLeft = Math.max(0, timeLeft)
+    return ((totalTime - safeLeft) / totalTime) * 100
+  }, [timeLeft, totalTime])
 
-    if (quiz.max_attempts > 0 && attemptCount >= quiz.max_attempts) {
-      throw new Error(`Maximum attempts reached (${quiz.max_attempts})`)
-    }
+  const answeredCount = Object.keys(answers).length
+  const q = questions[current]
 
-    const payload = buildSubmissionPayload()
-    console.log('buildSubmissionPayload result:', payload)
-    console.log('submitQuizAttempt debug:', {
-      user,
-      quizId,
-      quiz,
-      questions,
-      answers,
-      markedForReview,
-      payload
+  const toggleFlag = useCallback((qid: number) => {
+    setFlagged(prev => ({
+      ...prev,
+      [qid]: !prev[qid]
+    }))
+  }, [])
+
+  const toggleBookmark = useCallback((qid: number) => {
+    setBookmarked(prev => ({
+      ...prev,
+      [qid]: !prev[qid]
+    }))
+  }, [])
+
+  const handleCheckboxChange = useCallback((qid: number, opt: string) => {
+    setAnswers(prev => {
+      const prevAns = prev[qid] || []
+      return {
+        ...prev,
+        [qid]: prevAns.includes(opt)
+          ? prevAns.filter(t => t !== opt)
+          : [...prevAns, opt]
+      }
     })
-    
+  }, [])
+
+  const buildPayload = () => {
+    let score = 0
+    let totalMarks = 0
+    let obtainedMarks = 0
+    const userAns: Record<number, string[]> = {}
+    const correctMap: Record<number, string[]> = {}
+
+    questions.forEach(qq => {
+      const ua = answers[qq.id]?.map(s => s.trim().toLowerCase()) ?? []
+      userAns[qq.id] = ua
+      const correct = qq.options
+        .filter(o => o.isCorrect)
+        .map(o => o.text.trim().toLowerCase())
+      correctMap[qq.id] = correct
+      
+      const questionMarks = qq.marks || 1
+      totalMarks += questionMarks
+      
+      if (ua.length === correct.length && ua.every(a => correct.includes(a))) {
+        score += 1
+        obtainedMarks += questionMarks
+      }
+    })
+
+    return { userAns, correctMap, score, totalMarks, obtainedMarks }
+  }
+
+  const submitToDB = async (payload: {
+    userAns: any
+    correctMap: any
+    score: number
+    totalMarks: number
+    obtainedMarks: number
+  }) => {
+    if (!user) {
+      setErrorPopup('You must be logged in to submit')
+      return { data: null, error: new Error('User not logged in') }
+    }
+
     try {
-      // Prepare insert payload with correct types and only required fields
-      const insertPayload = {
-        quiz_id: Number(quizId),
-        user_id: String(user.id),
-        user_name: user.fullName || 'Anonymous',
-        answers: payload.userAnswers,
-        correct_answers: payload.correctAnswersMap,
-        score: Math.max(0, payload.score),
-        total_marks: Math.max(0, questions.reduce((sum, q) => sum + q.marks, 0)),
-        marked_questions: markedForReview
-      };
+      console.log('Submitting payload:', payload)
 
       const { data, error } = await supabase
         .from('attempts')
-        .insert(insertPayload)
-        .select()
+        .insert([{
+          quiz_id: Number(quizId),
+          user_id: user.id,
+          user_name: user.fullName || 'Unknown User',
+          answers: payload.userAns,
+          correct_answers: payload.correctMap,
+          submitted_at: new Date().toISOString(),
+          score: payload.score,
+          total_marks: payload.totalMarks,
+          obtained_marks: payload.obtainedMarks,
+          passing_score: quiz?.passing_score || Math.ceil(payload.totalMarks * 0.6),
+        }])
+        .select('id')
         .single()
 
-      console.log('Supabase insert result:', { data, error, insertPayload });
-      if (error) throw error
-      if (!data) throw new Error('No data returned from submission')
+      if (error) {
+        console.error('Supabase error details:', error)
+        throw error
+      }
 
-      return data
-    } catch (err) {
-      console.error('Submission error:', err, 'Payload:', payload)
-      throw new Error('Submission failed. Please try again.')
+      console.log('Submission successful:', data)
+      return { data, error: null }
+    } catch (error) {
+      console.error('Full submission error:', error)
+      return {
+        data: null,
+        error: error instanceof Error ? error : new Error('Submission failed')
+      }
     }
   }
 
@@ -780,16 +507,45 @@ export default function QuizAttemptPage() {
 
   const confirmSubmission = async () => {
     setConfirmDialogOpen(false)
+
+    if (!user) {
+      setErrorPopup('You must be logged in to submit')
+      return
+    }
+
+    if (quiz && attemptCount >= quiz.max_attempts) {
+      setErrorPopup('Maximum attempts reached')
+      return
+    }
+
     setSubmitted(true)
     setAutoSubmitting(true)
-    clearSession()
 
     try {
-      const result = await submitQuizAttempt()
-      router.push(`/result/${result.id}`)
-    } catch (err) {
-      console.error('Submission error:', err)
-      setError(err instanceof Error ? err.message : 'Submission failed')
+      const payload = buildPayload()
+      console.log('Attempting submission with payload:', payload)
+
+      const { data, error } = await submitToDB(payload)
+
+      if (error) {
+        console.error('Submission failed with error:', error)
+        setErrorPopup(`Submission failed: ${error.message}`)
+        setSubmitted(false)
+        return
+      }
+
+      if (!data) {
+        console.error('Submission failed - no data returned')
+        setErrorPopup('Submission failed - please try again')
+        setSubmitted(false)
+        return
+      }
+
+      console.log('Submission successful, redirecting to result:', data.id)
+      router.push(`/result/${data.id}`)
+    } catch (error) {
+      console.error('Unexpected submission error:', error)
+      setErrorPopup('An unexpected error occurred during submission')
       setSubmitted(false)
     } finally {
       setAutoSubmitting(false)
@@ -800,554 +556,567 @@ export default function QuizAttemptPage() {
     setTimeUpDialogOpen(true)
     setSubmitted(true)
     setAutoSubmitting(true)
-    clearSession()
 
     try {
-      const result = await submitQuizAttempt()
-      setTimeout(() => router.push(`/result/${result.id}`), 2000)
-    } catch (err) {
-      console.error('Auto-submission error:', err)
-      setError('Auto-submission failed. Please contact support.')
+      const payload = buildPayload()
+      console.log('Auto-submitting with payload:', payload)
+
+      const { data, error } = await submitToDB(payload)
+
+      if (error) {
+        console.error('Auto-submission failed:', error)
+        setErrorPopup('Auto-submission failed. Please contact support.')
+        return
+      }
+
+      if (!data) {
+        console.error('Auto-submission failed - no data returned')
+        setErrorPopup('Auto-submission failed - please contact support.')
+        return
+      }
+
+      console.log('Auto-submission successful, redirecting to result:', data.id)
+      setTimeout(() => router.push(`/result/${data.id}`), 2000)
+    } catch (error) {
+      console.error('Unexpected auto-submission error:', error)
+      setErrorPopup('An error occurred during auto-submission')
     } finally {
       setAutoSubmitting(false)
     }
   }
 
-  const navigateQuestion = (direction: 'prev' | 'next') => {
-    setCurrentQuestionIndex(prev => 
-      direction === 'prev' 
-        ? Math.max(0, prev - 1) 
-        : Math.min(questions.length - 1, prev + 1)
+  // Group questions by section_id
+  const questionsBySection = useMemo(() => {
+    const map: { [sectionId: number]: Question[] } = {}
+    for (const q of questions) {
+      if (!map[q.section_id]) map[q.section_id] = []
+      map[q.section_id].push(q)
+    }
+    return map
+  }, [questions])
+
+  // Helper to get section name
+  const getSectionName = (sectionId: number) => {
+    return (
+      sections.find(s => s.id === sectionId)?.name || `Section ${sectionId}`
     )
   }
 
-  // Loading state
-  if (loading || attemptsLoading || !isUserLoaded) {
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`)
+      })
+      setFullscreen(true)
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen()
+        setFullscreen(false)
+      }
+    }
+  }
+
+  const calculateScore = () => {
+    const payload = buildPayload()
+    return {
+      score: payload.score,
+      total: questions.length,
+      percentage: Math.round((payload.obtainedMarks / payload.totalMarks) * 100),
+      passed: payload.obtainedMarks >= (quiz?.passing_score || Math.ceil(payload.totalMarks * 0.6))
+    }
+  }
+
+  if (loading || attemptsLoading) {
     return (
-      <Box sx={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        height: '100vh',
-        gap: 3,
-        background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)'
-      }}>
-        <CircularProgress size={60} thickness={4} />
-        <Typography variant="h6" sx={{ mt: 3, fontWeight: 600 }}>
-          Preparing your quiz...
-        </Typography>
-        <Box sx={{ width: '80%', maxWidth: 400 }}>
-          <Skeleton variant="rounded" width="100%" height={60} sx={{ mb: 2, borderRadius: 3 }} />
-          <Skeleton variant="rounded" width="100%" height={400} sx={{ borderRadius: 3 }} />
-        </Box>
+      <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
+        <CircularProgress />
       </Box>
     )
   }
 
-  // Error state
-  if (quizNotFound || !quiz) {
+  if (!quiz) {
     return (
-      <Container sx={{ 
-        mt: 4,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '80vh'
-      }}>
-        <Alert 
-          severity="error" 
-          sx={{ 
-            mb: 4,
-            width: '100%',
-            maxWidth: 600,
-            boxShadow: 3,
-            borderRadius: 3
-          }}
-          action={
-            <IconButton
-              aria-label="close"
-              color="inherit"
-              size="small"
-              onClick={() => setError(null)}
-            >
-              <CloseIcon fontSize="inherit" />
-            </IconButton>
-          }
-        >
-          <Typography fontWeight={600}>
-            {error || 'Quiz not found or you don\'t have permission to access it.'}
-          </Typography>
-        </Alert>
-        <Button 
-          variant="contained" 
-          onClick={() => router.push('/')}
-          startIcon={<ArrowBackIcon />}
-          sx={{
-            px: 4,
-            py: 1.5,
-            borderRadius: 3,
-            fontWeight: 600,
-            boxShadow: 3
-          }}
-        >
-          Return to Dashboard
-        </Button>
+      <Container sx={{ mt: 4 }}>
+        <Typography variant="h6" color="error">
+          Quiz not found.
+        </Typography>
       </Container>
     )
   }
 
-  // Main render
+  if (errorPopup) {
+    return <ErrorPopup message={errorPopup} onClose={() => setErrorPopup(null)} />
+  }
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, minHeight: '100vh', bgcolor: 'background.default' }}>
-      {/* Sticky Sidebar Navigation (Desktop) */}
-      <Box
-        sx={{
-          width: { xs: '100%', md: 280 },
-          flexShrink: 0,
+    <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+      <Box sx={{
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #f5f7fa 0%, #e9ecf3 100%)',
+        p: fullscreen ? 0 : 3,
+        transition: 'padding 0.3s ease',
+      }}>
+        <Container maxWidth="xl" sx={{
+          py: fullscreen ? 0 : 4,
+          height: fullscreen ? '100vh' : 'auto',
+          overflow: fullscreen ? 'auto' : 'visible',
+          borderRadius: 3,
+          boxShadow: 4,
           bgcolor: 'background.paper',
-          borderRight: { md: '1px solid #e0e0e0' },
-          boxShadow: { md: 2 },
-          position: { md: 'sticky' },
-          top: { md: 0 },
-          height: { md: '100vh' },
-          zIndex: 10,
-          p: { xs: 2, md: 3 },
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-        }}
-      >
-        {/* Timer at the top */}
-        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center' }}>
-          <TimeDisplay seconds={timeLeft || 0} />
-        </Box>
-        {/* Question Navigation */}
-        <Typography variant="subtitle1" fontWeight={700} mb={1} textAlign="center">
-          Questions
-        </Typography>
-        <Grid container spacing={1} justifyContent="center">
-          {questions.map((question, index) => (
-            <Grid item key={question.id}>
-              <QuestionNavigationButton
-                index={index}
-                current={index === currentQuestionIndex}
-                answered={!!answers[question.id]}
-                marked={markedForReview.includes(question.id)}
-                onClick={() => setCurrentQuestionIndex(index)}
-                disabled={submitted}
-              />
-            </Grid>
-          ))}
-        </Grid>
-        <Divider sx={{ my: 2 }} />
-        <Stack spacing={1}>
-          <Box display="flex" alignItems="center" justifyContent="space-between">
-            <Typography variant="body2" color="text.secondary">
-              Answered:
-            </Typography>
-            <Chip
-              label={`${answeredCount}/${questions.length}`}
-              color={answeredCount === questions.length ? 'success' : 'default'}
-              size="small"
-              variant="outlined"
-            />
-          </Box>
-          <Box display="flex" alignItems="center" justifyContent="space-between">
-            <Typography variant="body2" color="text.secondary">
-              Marked for Review:
-            </Typography>
-            <Chip
-              label={markedForReview.length}
-              color="warning"
-              size="small"
-              variant="outlined"
-            />
-          </Box>
-          {quiz?.max_attempts > 0 && (
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Typography variant="body2" color="text.secondary">
-                Attempts:
-              </Typography>
-              <Chip
-                label={`${attemptCount}/${quiz.max_attempts}`}
-                color={attemptCount >= quiz.max_attempts ? 'error' : 'default'}
-                size="small"
-                variant="outlined"
-              />
-            </Box>
-          )}
-        </Stack>
-      </Box>
-
-      {/* Main Content Area */}
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', p: { xs: 2, md: 5 } }}>
-        {/* Quiz Header */}
-        <Paper
-          component={motion.div}
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: ANIMATION_DURATION }}
-          sx={{
-            p: 3,
-            borderRadius: 3,
-            bgcolor: 'background.paper',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-            border: '1px solid rgba(0,0,0,0.05)',
-            width: '100%',
-            maxWidth: 700,
-            mb: 3,
-          }}
-        >
-          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems="flex-start" gap={2}>
-            <Box>
-              <Typography variant="h4" fontWeight={700} sx={{ mb: 0.5 }}>
-                {quiz?.quiz_title}
-              </Typography>
-              {quiz?.description && (
-                <Typography variant="body2" color="text.secondary">
-                  {quiz.description}
+        }}>
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={3} sx={{ height: '100%' }}>
+            {/* Left Navigator */}
+            <Paper
+              elevation={fullscreen ? 0 : 2}
+              sx={{
+                p: 2,
+                borderRadius: fullscreen ? 0 : 3,
+                bgcolor: 'background.paper',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                width: fullscreen ? 280 : 320,
+                height: fullscreen ? '100vh' : 'auto',
+                boxShadow: fullscreen ? 'none' : 2,
+                border: '1px solid #d1d5db',
+                overflowY: 'auto',
+                position: fullscreen ? 'fixed' : 'static',
+                left: 0,
+                top: 0,
+                zIndex: fullscreen ? 1200 : 'auto',
+              }}
+            >
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                <Typography variant="subtitle1" fontWeight={700} color="text.secondary">
+                  Quiz Navigation
                 </Typography>
-              )}
-            </Box>
-            {/* Timer for mobile */}
-            <Box sx={{ display: { xs: 'block', md: 'none' } }}>
-              <TimeDisplay seconds={timeLeft || 0} />
-            </Box>
-          </Stack>
-          <LinearProgress
-            variant="determinate"
-            value={progress}
-            sx={{
-              height: 8,
-              mt: 2,
-              borderRadius: 4,
-              '& .MuiLinearProgress-bar': {
-                bgcolor: timeLeft && timeLeft <= TIME_WARNING_THRESHOLD ? 'error.main' : 'primary.main',
-                borderRadius: 4,
-              },
-            }}
-          />
-        </Paper>
+                <Box>
+                  <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+                    <IconButton onClick={toggleFullscreen} size="small">
+                      {fullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Help">
+                    <IconButton onClick={() => setShowHelp(!showHelp)} size="small">
+                      <HelpOutlineIcon />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              </Box>
 
-        {/* Current Question Card */}
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={currentQuestion?.id || 'empty'}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: ANIMATION_DURATION }}
-            style={{ width: '100%', maxWidth: 700 }}
-          >
-            {currentQuestion ? (
-              <Card
-                sx={{
-                  borderRadius: 3,
-                  boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
-                  border: '1px solid rgba(0,0,0,0.05)',
-                  mb: 3,
-                }}
-              >
-                <CardContent>
-                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={2}>
-                    <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
-                      <Box component="span" color="primary.main">Q{currentQuestionIndex + 1}.</Box> {currentQuestion.question_text}
-                    </Typography>
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                      <Chip
-                        label={`${currentQuestion.marks} mark${currentQuestion.marks > 1 ? 's' : ''}`}
-                        color="secondary"
-                        size="small"
-                        variant="outlined"
-                      />
-                      <Tooltip title={markedForReview.includes(currentQuestion.id) ? "Unmark for review" : "Mark for review"}>
-                        <IconButton
-                          onClick={() => toggleMarkForReview(currentQuestion.id)}
-                          disabled={submitted}
-                          color={markedForReview.includes(currentQuestion.id) ? "warning" : "default"}
-                          size="small"
-                        >
-                          {markedForReview.includes(currentQuestion.id) ? (
-                            <FlagIcon color="warning" />
-                          ) : (
-                            <OutlinedFlagIcon />
-                          )}
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
+              {showHelp && (
+                <Paper elevation={2} sx={{ p: 2, mb: 2, bgcolor: '#f8f9fa', border: '1px solid #e0e0e0' }}>
+                  <Typography variant="body2" sx={{ mb: 1, fontWeight: 700, color: '#222' }}>
+                    Navigation Guide
+                  </Typography>
+                  <Stack spacing={1}>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.attempted, color: '#fff', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, border: `1.5px solid ${NAV_COLORS.borderAttempted}` }}>1</Box>
+                      <Typography variant="caption" color="#222">Attempted</Typography>
+                    </Box>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.unattempted, color: '#222', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, border: `1.5px solid ${NAV_COLORS.borderUnattempted}` }}>2</Box>
+                      <Typography variant="caption" color="#222">Unattempted</Typography>
+                    </Box>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.current, color: '#222', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, border: `2px solid ${NAV_COLORS.borderCurrent}` }}>3</Box>
+                      <Typography variant="caption" color="#222">Current</Typography>
+                    </Box>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.unattempted, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1.5px solid #d32f2f' }}>
+                        <FlagIcon sx={{ color: '#d32f2f', fontSize: 18 }} />
+                      </Box>
+                      <Typography variant="caption" color="#222">Flagged</Typography>
+                    </Box>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.bookmarked, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1.5px solid ${NAV_COLORS.borderBookmarked}` }}>
+                        <BookmarkIcon sx={{ color: '#e6b800', fontSize: 18 }} />
+                      </Box>
+                      <Typography variant="caption" color="#222">Bookmarked</Typography>
+                    </Box>
                   </Stack>
-                  {currentQuestion.image_url && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.2 }}
-                    >
-                      <Box
-                        component="img"
-                        src={currentQuestion.image_url}
-                        alt="Question"
-                        sx={{
-                          maxWidth: '100%',
-                          maxHeight: 300,
-                          mb: 3,
-                          borderRadius: 2,
-                          boxShadow: 3,
-                          border: '1px solid rgba(0,0,0,0.1)',
-                        }}
-                      />
-                    </motion.div>
-                  )}
-                  <FormGroup>
-                    {currentQuestion.options.map((option: QuizOption, index: number) => {
-                      const isSingle = currentQuestion.question_type === 'single'
-                      const isChecked = answers[currentQuestion.id]?.includes(index) || false
-                      const isCorrect = currentQuestion.correct_answers.includes(index)
+                </Paper>
+              )}
+
+              {/* Section navigation */}
+              {Object.entries(questionsBySection).map(([sectionId, qs], sidx) => (
+                <Box key={sectionId} mb={2}>
+                  <Typography variant="caption" fontWeight={700} color="text.secondary" mb={1} display="block" sx={{ letterSpacing: 1, textTransform: 'uppercase' }}>
+                    {getSectionName(Number(sectionId))}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {qs.map((q, idx) => {
+                      const globalIdx = questions.findIndex(qq => qq.id === q.id)
                       return (
-                        <motion.div
-                          key={index}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                        >
-                          <FormControlLabel
-                            control={
-                              isSingle ? (
-                                <Radio
-                                  checked={isChecked}
-                                  onChange={() => handleAnswerChange(currentQuestion.id, index)}
-                                  disabled={submitted}
-                                  name={`question-${currentQuestion.id}`}
-                                  color={submitted && isCorrect ? 'success' : 'primary'}
-                                />
-                              ) : (
-                                <Checkbox
-                                  checked={isChecked}
-                                  onChange={() => handleAnswerChange(currentQuestion.id, index)}
-                                  disabled={submitted}
-                                  color={submitted && isCorrect ? 'success' : 'primary'}
-                                />
-                              )
-                            }
-                            label={
-                              <Typography sx={{ fontSize: '1.05rem', fontWeight: 500 }}>
-                                {option.text}
-                                {submitted && isCorrect && (
-                                  <Box
-                                    component="span"
-                                    sx={{
-                                      color: 'success.main',
-                                      ml: 1,
-                                      fontWeight: 'bold',
-                                    }}
-                                  >
-                                    ✓
-                                  </Box>
-                                )}
-                              </Typography>
-                            }
-                            sx={{
-                              mb: 1.5,
-                              pl: 1,
-                              pr: 2,
-                              py: 1,
-                              borderRadius: 2,
-                              bgcolor: submitted && isChecked && !isCorrect ? 'error.lighter' : 'transparent',
-                              border: submitted && isChecked && !isCorrect ? '1px solid #f44336' : 'none',
-                              transition: 'all 0.2s',
-                            }}
-                          />
-                        </motion.div>
+                        <QuestionButton
+                          key={q.id}
+                          idx={globalIdx}
+                          current={current}
+                          answers={answers}
+                          flagged={flagged}
+                          questions={questions}
+                          setCurrent={setCurrent}
+                          submitted={submitted}
+                          toggleFlag={toggleFlag}
+                          bookmarked={bookmarked}
+                        />
                       )
                     })}
-                  </FormGroup>
-                  {/* Explanation after submission */}
-                  {submitted && currentQuestion.explanation && (
-                    <ExplanationBox explanation={currentQuestion.explanation} />
+                  </Box>
+                </Box>
+              ))}
+
+              <Box mt="auto">
+                <Box display="flex" justifyContent="space-between" mb={1}>
+                  <Typography variant="body2" color="text.secondary">
+                    Answered: {answeredCount}/{questions.length}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Flagged: {Object.values(flagged).filter(Boolean).length}
+                  </Typography>
+                </Box>
+
+                <Button
+                  fullWidth
+                  variant="contained"
+                  color="inherit"
+                  onClick={handleSubmitClick}
+                  disabled={submitted || timeLeft === 0}
+                  sx={{ 
+                    textTransform: 'none', 
+                    fontSize: '0.95rem', 
+                    py: 1.5, 
+                    fontWeight: 600,
+                    borderRadius: '8px',
+                  }}
+                  startIcon={<CheckCircleIcon />}
+                >
+                  Submit Quiz
+                </Button>
+              </Box>
+            </Paper>
+
+            {/* Right Main Quiz */}
+            <Box flex={1} sx={{ 
+              pl: fullscreen ? '300px' : 0,
+              transition: 'padding 0.3s ease',
+            }}>
+              <Stack spacing={3} sx={{ height: '100%' }}>
+                {/* Header */}
+                <Paper elevation={3} sx={{ p: 3, borderRadius: 3, mb: 3, boxShadow: 4, border: '1px solid #d1d5db', bgcolor: 'white' }}>
+                  <Box display="flex" justifyContent="space-between" alignItems="center">
+                    <Typography variant="h5" fontWeight={800} color="text.primary">
+                      {quiz.quiz_title ?? quiz.quiz_name ?? 'Untitled Quiz'}
+                    </Typography>
+                    <Chip
+                      icon={<TimerIcon />}
+                      label={formatTime(timeLeft ?? 0)}
+                      variant="filled"
+                      sx={{ fontWeight: 700, fontSize: '1.1rem', px: 2, py: 1, borderRadius: 2, bgcolor: '#444', color: '#fff' }}
+                    />
+                  </Box>
+                  <Divider sx={{ my: 2 }} />
+                </Paper>
+
+                {/* Question Navigation */}
+                <Box display="flex" justifyContent="space-between" alignItems="center">
+                  <Typography variant="body2" fontWeight={500}>
+                    Question {current + 1} of {questions.length}
+                  </Typography>
+                  <Box display="flex" gap={1}>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setCurrent(Math.max(0, current - 1))}
+                      disabled={current === 0 || submitted}
+                      startIcon={<BackIcon />}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setCurrent(Math.min(questions.length - 1, current + 1))}
+                      disabled={current === questions.length - 1 || submitted}
+                      endIcon={<NextIcon />}
+                    >
+                      Next
+                    </Button>
+                  </Box>
+                </Box>
+
+                {/* Section-wise Questions */}
+                {(() => {
+                  const currentQuestion = questions[current]
+                  const currentSectionId = currentQuestion?.section_id
+                  const sectionQuestions = questionsBySection[currentSectionId] || []
+                  const sectionName = getSectionName(currentSectionId)
+                  const sectionIndex = sectionQuestions.findIndex(q => q.id === currentQuestion.id)
+                  const questionMarks = currentQuestion?.marks || 1
+
+                  return (
+                    <Box>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                        <Typography variant="h6" fontWeight={700} color="text.secondary">
+                          {sectionName}
+                        </Typography>
+                        <Box display="flex" gap={1}>
+                          <Tooltip title={flagged[currentQuestion.id] ? 'Unflag question' : 'Flag question'}>
+                            <IconButton
+                              size="small"
+                              onClick={() => toggleFlag(currentQuestion.id)}
+                              color={flagged[currentQuestion.id] ? 'error' : 'inherit'}
+                            >
+                              {flagged[currentQuestion.id] ? <FlagIcon /> : <FlagOutlinedIcon />}
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title={bookmarked[currentQuestion.id] ? 'Remove bookmark' : 'Bookmark question'}>
+                            <IconButton
+                              size="small"
+                              onClick={() => toggleBookmark(currentQuestion.id)}
+                              color={bookmarked[currentQuestion.id] ? 'warning' : 'inherit'}
+                            >
+                              {bookmarked[currentQuestion.id] ? <BookmarkIcon /> : <BookmarkBorderIcon />}
+                            </IconButton>
+                          </Tooltip>
+                          {questionMarks > 0 && (
+                            <Chip
+                              label={`${questionMarks} mark${questionMarks > 1 ? 's' : ''}`}
+                              size="small"
+                              color="info"
+                              variant="outlined"
+                            />
+                          )}
+                        </Box>
+                      </Box>
+
+                      <Card sx={{
+                        borderRadius: 3,
+                        boxShadow: 3,
+                        background: 'white',
+                        borderLeft: '4px solid',
+                        borderColor: flagged[currentQuestion.id] ? 'error.main' : 'text.primary',
+                        mb: 2,
+                      }}>
+                        <CardContent>
+                          <Typography variant="subtitle1" fontWeight={700} mb={2} color="text.primary">
+                            Q{sectionIndex + 1}. {currentQuestion.question_text}
+                          </Typography>
+                          {currentQuestion.question_type === 'single' ? (
+                            <RadioGroup
+                              value={answers[currentQuestion.id]?.[0] || ''}
+                              onChange={e => handleCheckboxChange(currentQuestion.id, e.target.value)}
+                            >
+                              {currentQuestion.options.map((opt, i) => (
+                                <FormControlLabel
+                                  key={i}
+                                  value={opt.text}
+                                  control={<Radio disabled={submitted} />}
+                                  label={
+                                    <Box sx={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      textDecoration: submitted && opt.isCorrect ? 'underline' : 'none',
+                                      color: submitted && opt.isCorrect ? 'success.main' : 'text.primary',
+                                    }}>
+                                      {opt.text}
+                                      {submitted && opt.isCorrect && (
+                                        <CheckCircleIcon color="success" fontSize="small" sx={{ ml: 1 }} />
+                                      )}
+                                    </Box>
+                                  }
+                                  sx={{
+                                    alignItems: 'flex-start',
+                                    mb: 1,
+                                    bgcolor:
+                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
+                                        ? 'error.light'
+                                        : 'transparent',
+                                    borderRadius: 1,
+                                    p:
+                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
+                                        ? 1
+                                        : 0,
+                                  }}
+                                />
+                              ))}
+                            </RadioGroup>
+                          ) : (
+                            <FormGroup>
+                              {currentQuestion.options.map((opt, i) => (
+                                <FormControlLabel
+                                  key={i}
+                                  control={
+                                    <Checkbox
+                                      checked={answers[currentQuestion.id]?.includes(opt.text) || false}
+                                      onChange={() => handleCheckboxChange(currentQuestion.id, opt.text)}
+                                      disabled={submitted}
+                                    />
+                                  }
+                                  label={
+                                    <Box sx={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      textDecoration: submitted && opt.isCorrect ? 'underline' : 'none',
+                                      color: submitted && opt.isCorrect ? 'success.main' : 'text.primary',
+                                    }}>
+                                      {opt.text}
+                                      {submitted && opt.isCorrect && (
+                                        <CheckCircleIcon color="success" fontSize="small" sx={{ ml: 1 }} />
+                                      )}
+                                    </Box>
+                                  }
+                                  sx={{
+                                    alignItems: 'flex-start',
+                                    mb: 1,
+                                    bgcolor:
+                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
+                                        ? 'error.light'
+                                        : 'transparent',
+                                    borderRadius: 1,
+                                    p:
+                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
+                                        ? 1
+                                        : 0,
+                                  }}
+                                />
+                              ))}
+                            </FormGroup>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </Box>
+                  )
+                })()}
+
+                {/* Bottom Navigation */}
+                <Box display="flex" justifyContent="space-between" mt="auto">
+                  <Button
+                    variant="outlined"
+                    onClick={() => setCurrent(Math.max(0, current - 1))}
+                    disabled={current === 0 || submitted}
+                    startIcon={<BackIcon />}
+                    sx={{ borderRadius: '8px' }}
+                  >
+                    Previous Question
+                  </Button>
+                  {current < questions.length - 1 ? (
+                    <Button
+                      variant="contained"
+                      onClick={() => setCurrent(Math.min(questions.length - 1, current + 1))}
+                      disabled={submitted}
+                      endIcon={<NextIcon />}
+                      sx={{ borderRadius: '8px' }}
+                    >
+                      Next Question
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      color="inherit"
+                      onClick={handleSubmitClick}
+                      disabled={submitted || timeLeft === 0}
+                      endIcon={<CheckCircleIcon />}
+                      sx={{ borderRadius: '8px' }}
+                    >
+                      {submitted ? 'Submitted' : 'Submit Quiz'}
+                    </Button>
                   )}
-                </CardContent>
-              </Card>
-            ) : null}
-          </motion.div>
-        </AnimatePresence>
+                </Box>
+              </Stack>
+            </Box>
+          </Stack>
+        </Container>
 
-        {/* Navigation Buttons - Sticky on Mobile */}
-        <Box
-          sx={{
-            width: '100%',
-            maxWidth: 700,
-            position: { xs: 'fixed', md: 'static' },
-            bottom: { xs: 0, md: 'auto' },
-            left: { xs: 0, md: 'auto' },
-            bgcolor: { xs: 'background.paper', md: 'transparent' },
-            boxShadow: { xs: '0 -2px 16px rgba(0,0,0,0.08)', md: 'none' },
-            borderTop: { xs: '1px solid #e0e0e0', md: 'none' },
-            py: 2,
-            px: { xs: 2, md: 0 },
-            zIndex: 1200,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 2,
-            mt: { md: 2 },
-          }}
-        >
-          <LoadingButton
-            variant="outlined"
-            onClick={() => navigateQuestion('prev')}
-            disabled={currentQuestionIndex === 0 || submitted}
-            loading={autoSubmitting}
-            startIcon={<NavigateBeforeIcon />}
-            sx={{
-              px: 4,
-              py: 1.5,
-              borderRadius: 3,
-              fontWeight: 600,
-            }}
-          >
-            Previous
-          </LoadingButton>
-          {isLastQuestion ? (
-            <LoadingButton
-              variant="contained"
-              color="primary"
-              onClick={handleSubmitClick}
-              disabled={!user || !quizId || !quiz || !questions.length || loading || autoSubmitting}
-              loading={autoSubmitting}
-              endIcon={<DoneAllIcon />}
-              sx={{
-                px: 4,
-                py: 1.5,
-                borderRadius: 3,
-                fontWeight: 600,
-                boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)',
-              }}
-            >
-              Submit Quiz
-            </LoadingButton>
-          ) : (
-            <LoadingButton
-              variant="contained"
-              onClick={() => navigateQuestion('next')}
-              disabled={submitted}
-              loading={autoSubmitting}
-              endIcon={<NavigateNextIcon />}
-              sx={{
-                px: 4,
-                py: 1.5,
-                borderRadius: 3,
-                fontWeight: 600,
-                boxShadow: '0 4px 12px rgba(63, 81, 181, 0.2)',
-              }}
-            >
-              Next
-            </LoadingButton>
-          )}
-        </Box>
-      </Box>
-
-      {/* Confirmation Dialog */}
-      <Dialog 
-        open={confirmDialogOpen} 
-        onClose={() => setConfirmDialogOpen(false)}
-        PaperProps={{
-          sx: {
-            borderRadius: 3,
-            p: 1
-          }
-        }}
-      >
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 600 }}>
-          <SendIcon color="primary" />
-          Confirm Submission
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            You've answered {answeredCount} out of {questions.length} questions.
+        {/* Dialogs */}
+        <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
+          <DialogTitle>Submit Quiz</DialogTitle>
+          <DialogContent>
+            <Divider sx={{ mb: 2 }} />
+            <DialogContentText>
+              You answered {answeredCount} out of {questions.length} questions.
+            </DialogContentText>
             {answeredCount < questions.length && (
-              <Box component="span" color="error.main" fontWeight={600}>
-                {' '}You have {questions.length - answeredCount} unanswered questions.
+              <DialogContentText color="error" sx={{ mt: 1 }}>
+                You have {questions.length - answeredCount} unanswered questions.
+              </DialogContentText>
+            )}
+            {/* Show flagged and bookmarked questions */}
+            {Object.values(flagged).filter(Boolean).length > 0 && (
+              <Box mt={2}>
+                <Typography variant="subtitle2" color="warning.main" fontWeight={600} mb={0.5}>Flagged Questions:</Typography>
+                <Stack direction="row" flexWrap="wrap" gap={1} mb={1}>
+                  {questions
+                    .map((q, idx) => ({ ...q, idx }))
+                    .filter(q => flagged[q.id])
+                    .map(q => (
+                      <Chip
+                        key={q.id}
+                        label={`Q${q.idx + 1} (${getSectionName(q.section_id)})`}
+                        color="warning"
+                        variant="outlined"
+                      />
+                    ))}
+                </Stack>
               </Box>
             )}
-          </DialogContentText>
-          <DialogContentText sx={{ mt: 2 }}>
-            You've marked {markedForReview.length} questions for review.
-          </DialogContentText>
-          <DialogContentText sx={{ mt: 2 }}>
-            Are you sure you want to submit your quiz?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button 
-            onClick={() => setConfirmDialogOpen(false)}
-            sx={{ borderRadius: 2, fontWeight: 600 }}
-          >
-            Cancel
-          </Button>
-          <LoadingButton 
-            onClick={confirmSubmission} 
-            variant="contained"
-            loading={autoSubmitting}
-            sx={{ borderRadius: 2, fontWeight: 600 }}
-            startIcon={<SendIcon />}
-          >
-            Submit
-          </LoadingButton>
-        </DialogActions>
-      </Dialog>
+            {Object.values(bookmarked).filter(Boolean).length > 0 && (
+              <Box mt={2}>
+                <Typography variant="subtitle2" color="info.main" fontWeight={600} mb={0.5}>Bookmarked Questions:</Typography>
+                <Stack direction="row" flexWrap="wrap" gap={1} mb={1}>
+                  {questions
+                    .map((q, idx) => ({ ...q, idx }))
+                    .filter(q => bookmarked[q.id])
+                    .map(q => (
+                      <Chip
+                        key={q.id}
+                        label={`Q${q.idx + 1} (${getSectionName(q.section_id)})`}
+                        color="info"
+                        variant="outlined"
+                      />
+                    ))}
+                </Stack>
+              </Box>
+            )}
+            {/* Optionally show pass/fail status only */}
+            {quiz.passing_score && (
+              <Box mt={2}>
+                <Typography variant="body2" color={calculateScore().passed ? 'success.main' : 'error.main'}>
+                  {calculateScore().passed ? 'Likely to pass' : 'Not passing yet'}
+                </Typography>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmDialogOpen(false)} color="secondary">
+              Continue Quiz
+            </Button>
+            <Button onClick={confirmSubmission} variant="contained" autoFocus>
+              Confirm Submit
+            </Button>
+          </DialogActions>
+        </Dialog>
 
-      {/* Time Up Dialog */}
-      <Dialog 
-        open={timeUpDialogOpen}
-        PaperProps={{
-          sx: {
-            borderRadius: 3,
-            p: 1
-          }
-        }}
-      >
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, fontWeight: 600 }}>
-          <TimerIcon color="error" />
-          Time's Up!
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Your quiz is being automatically submitted. Please wait...
-          </DialogContentText>
-          <Box display="flex" justifyContent="center" mt={3}>
-            <CircularProgress size={60} thickness={4} />
-          </Box>
-        </DialogContent>
-      </Dialog>
-
-      {/* Error Alert */}
-      <AnimatePresence>
-        {error && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            transition={{ duration: ANIMATION_DURATION }}
-          >
-            <Alert 
-              severity="error" 
-              onClose={() => setError(null)}
-              sx={{ 
-                position: 'fixed', 
-                bottom: 20, 
-                right: 20, 
-                minWidth: 300,
-                boxShadow: 3,
-                borderRadius: 3,
-                border: '1px solid rgba(211, 47, 47, 0.2)'
-              }}
-            >
-              <Typography fontWeight={600}>{error}</Typography>
-            </Alert>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </Box>
+        <Dialog open={timeUpDialogOpen} fullWidth maxWidth="sm">
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TimerIcon color="error" />
+            ⏰ Time's Up
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              The quiz time has ended. Your answers are being auto-submitted.
+            </DialogContentText>
+            {autoSubmitting && (
+              <Box mt={3} display="flex" flexDirection="column" alignItems="center">
+                <CircularProgress size={48} thickness={4} sx={{ mb: 2 }} />
+                <Typography variant="body2" color="text.secondary">
+                  Please wait while we process your submission...
+                </Typography>
+              </Box>
+            )}
+          </DialogContent>
+        </Dialog>
+      </Box>
+    </motion.div>
   )
 }

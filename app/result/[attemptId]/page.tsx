@@ -15,6 +15,7 @@ import {
   Divider,
   Paper,
   Alert,
+  CardActions,
 } from '@mui/material';
 import { supabase } from '@/utils/supabaseClient';
 import { motion } from 'framer-motion';
@@ -24,6 +25,10 @@ import CelebrationIcon from '@mui/icons-material/Celebration';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 const PASS_THRESHOLD = 60;
+
+type SectionKey = string;
+type SectionQuestionsMap = { [section: SectionKey]: any[] };
+type SectionScoresMap = { [section: SectionKey]: { correct: number; total: number } };
 
 export default function ResultPage() {
   const params = useParams();
@@ -45,7 +50,7 @@ export default function ResultPage() {
       setLoading(true);
       const { data: attemptData } = await supabase
         .from('attempts')
-        .select('id,quiz_id,user_name,score,correct_answers,answers')
+        .select('id,quiz_id,user_name,score,correct_answers,answers,sections')
         .eq('id', attemptId)
         .single();
       if (!attemptData) {
@@ -62,6 +67,7 @@ export default function ResultPage() {
         ...attemptData,
         answers: typeof attemptData.answers === 'string' ? JSON.parse(attemptData.answers || '{}') : attemptData.answers || {},
         correct_answers: typeof attemptData.correct_answers === 'string' ? JSON.parse(attemptData.correct_answers || '{}') : attemptData.correct_answers || {},
+        sections: typeof attemptData.sections === 'string' ? JSON.parse(attemptData.sections || '{}') : attemptData.sections || {},
       });
       setLoading(false);
     };
@@ -140,6 +146,37 @@ export default function ResultPage() {
   const score = attempt?.score ?? 0;
   const isPassed = total > 0 && (score / total) * 100 >= PASS_THRESHOLD;
 
+  // Group questions by section
+  const sectionLabels: { [key: string]: string } = {
+    qa: 'Quantitative Aptitude',
+    lr: 'Logical Reasoning',
+    va: 'Verbal Ability',
+    di: 'Data Interpretation',
+    gk: 'General Knowledge',
+  };
+  const questionsBySection: SectionQuestionsMap = {};
+  questions.forEach((q: any) => {
+    const section: SectionKey = attempt?.sections?.[q.id] || 'other';
+    if (!questionsBySection[section]) questionsBySection[section] = [];
+    questionsBySection[section].push(q);
+  });
+  // Calculate per-section scores
+  const sectionScores: SectionScoresMap = {};
+  Object.entries(questionsBySection).forEach(([section, qs]) => {
+    let correct = 0;
+    (qs as any[]).forEach((q: any) => {
+      const userAns = attempt.answers?.[q.id] ?? [];
+      const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
+      const correctAns = attempt.correct_answers?.[q.id] ?? [];
+      const correctAnswers = Array.isArray(correctAns) ? correctAns.map(normalize) : [normalize(correctAns)];
+      const isCorrect =
+        userAnswers.length === correctAnswers.length &&
+        userAnswers.every((ans: any) => correctAnswers.includes(ans));
+      if (isCorrect) correct++;
+    });
+    sectionScores[section] = { correct, total: (qs as any[]).length };
+  });
+
   return (
     <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7 }}>
       <Box sx={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f4f6f8 0%, #e3eafc 100%)', py: 4 }}>
@@ -189,8 +226,14 @@ export default function ResultPage() {
               <Typography sx={{ ml: 2 }}>Loading detailed review...</Typography>
             </Box>
           ) : (
+            <Stack spacing={4}>
+              {Object.entries(questionsBySection).map(([section, qs], sidx) => (
+                <Box key={section}>
+                  <Typography variant="h6" fontWeight={700} color="primary" mb={1}>
+                    {sectionLabels[section] || section} (Score: {sectionScores[section]?.correct}/{sectionScores[section]?.total})
+                  </Typography>
             <Stack spacing={3}>
-              {questions.map((q, idx) => {
+                    {qs.map((q, idx) => {
                 const userAns = attempt.answers?.[q.id] ?? [];
                 const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
                 const correctAns = attempt.correct_answers?.[q.id] ?? [];
@@ -206,27 +249,41 @@ export default function ResultPage() {
                     transition={{ duration: 0.4, delay: idx * 0.05 }}
                   >
                     <Card
-                      elevation={3}
+                      elevation={4}
                       sx={{
-                        my: 1,
+                        my: 2,
                         backgroundColor: isCorrect ? '#e8f5e9' : '#ffebee',
                         borderLeft: `6px solid ${isCorrect ? '#388e3c' : '#d32f2f'}`,
-                        borderRadius: 2,
-                        boxShadow: 3,
+                        borderRadius: 3,
+                        boxShadow: 6,
+                        position: 'relative',
+                        transition: 'box-shadow 0.3s, transform 0.3s',
+                        '&:hover': {
+                          boxShadow: 12,
+                          transform: 'translateY(-2px) scale(1.01)',
+                        },
                       }}
                     >
                       <CardContent>
-                        <Stack direction="row" alignItems="center" spacing={2}>
+                        <Stack direction="row" alignItems="center" spacing={2} mb={1}>
                           <Typography variant="h6" fontWeight={700} color={isCorrect ? 'success.main' : 'error.main'}>
                             Q{idx + 1}
                           </Typography>
                           <Typography variant="body1" fontWeight={600} color="text.primary">
                             {q.question_text}
                           </Typography>
+                          <Box flexGrow={1} />
+                          <Chip
+                            label={isCorrect ? 'Correct' : 'Incorrect'}
+                            color={isCorrect ? 'success' : 'error'}
+                            sx={{ fontWeight: 700, fontSize: 15 }}
+                          />
                         </Stack>
                         <Stack spacing={1} mt={1}>
                           {q.options.map((opt: any, i: number) => {
-                            const selected = userAnswers.includes(normalize(opt.text));
+                            const normalizedOpt = normalize(opt.text);
+                            const selected = userAnswers.includes(normalizedOpt);
+                            const isOptionCorrect = opt.isCorrect;
                             return (
                               <Paper
                                 key={i}
@@ -236,37 +293,68 @@ export default function ResultPage() {
                                   pl: 2,
                                   display: 'flex',
                                   alignItems: 'center',
-                                  background: selected ? (opt.isCorrect ? '#c8e6c9' : '#ffcdd2') : 'inherit',
-                                  borderColor: opt.isCorrect ? 'success.main' : selected ? 'error.main' : 'divider',
+                                  background:
+                                    isOptionCorrect
+                                      ? '#c8e6c9'
+                                      : selected
+                                      ? '#ffe0e0'
+                                      : 'inherit',
+                                  borderColor: isOptionCorrect
+                                    ? 'success.main'
+                                    : selected
+                                    ? 'error.main'
+                                    : 'divider',
+                                  borderWidth: 2,
                                 }}
                               >
-                                <Typography>
+                                <Typography sx={{ flex: 1 }}>
                                   {opt.text}
-                                  {opt.isCorrect && (
-                                    <Box component="span" ml={1} color="success.main" fontWeight="bold">
-                                      ✓
-                                    </Box>
-                                  )}
-                                  {selected && !opt.isCorrect && (
-                                    <Box component="span" ml={1} color="error.main" fontWeight="bold">
-                                      ✗
-                                    </Box>
-                                  )}
                                 </Typography>
+                                {isOptionCorrect && (
+                                  <Chip
+                                    label="Correct"
+                                    color="success"
+                                    size="small"
+                                    icon={<Check size={18} />}
+                                    sx={{ ml: 1, fontWeight: 700 }}
+                                  />
+                                )}
+                                {selected && !isOptionCorrect && (
+                                  <Chip
+                                    label="Your Answer"
+                                    color="error"
+                                    size="small"
+                                    icon={<X size={18} />}
+                                    sx={{ ml: 1, fontWeight: 700 }}
+                                  />
+                                )}
+                                {selected && isOptionCorrect && (
+                                  <Chip
+                                    label="Your Answer"
+                                    color="primary"
+                                    size="small"
+                                    sx={{ ml: 1, fontWeight: 700 }}
+                                  />
+                                )}
                               </Paper>
                             );
                           })}
                         </Stack>
                         {q.explanation && (
-                          <Typography variant="body2" mt={1.5} fontStyle="italic" color="text.secondary">
-                            Explanation: {q.explanation}
-                          </Typography>
+                          <Box mt={2} p={2} bgcolor="#f1f8e9" borderRadius={2} borderLeft="4px solid #43a047">
+                            <Typography variant="body2" fontStyle="italic" color="text.secondary">
+                              <b>Explanation:</b> {q.explanation}
+                            </Typography>
+                          </Box>
                         )}
                       </CardContent>
                     </Card>
                   </motion.div>
                 );
               })}
+                  </Stack>
+                </Box>
+              ))}
             </Stack>
           )}
 

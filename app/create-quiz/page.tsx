@@ -31,6 +31,7 @@ import {
   AccordionDetails,
   Chip,
   LinearProgress,
+  FormGroup,
 } from '@mui/material';
 import { useForm, FormProvider, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -39,7 +40,7 @@ import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { quizSchema, QuizFormValues } from '@/schemas/quizSchema';
+import { quizSchema, QuizFormValues, QuizSectionEnum, getSectionName, QuizSection } from '@/schemas/quizSchema';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -70,6 +71,7 @@ interface QuizQuestion {
   explanation?: string;
   marks: string;
   options: QuizOption[];
+  section_id: number;
 }
 
 interface QuizResponse {
@@ -81,6 +83,33 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
+
+// Enhanced section labels with descriptions
+const SECTION_LABELS = {
+  qa: {
+    title: 'Quantitative Aptitude (QA)',
+    description: 'Mathematics, algebra, geometry, arithmetic problems'
+  },
+  lr: {
+    title: 'Logical Reasoning (LR)',
+    description: 'Puzzles, sequences, pattern recognition, logical problems'
+  },
+  va: {
+    title: 'Verbal Ability (VA)',
+    description: 'Grammar, vocabulary, sentence correction, word meanings'
+  },
+  di: {
+    title: 'Data Interpretation (DI)',
+    description: 'Charts, graphs, tables analysis and data-based questions'
+  },
+  gk: {
+    title: 'General Knowledge (GK)',
+    description: 'Current affairs, static GK, and general awareness'
+  }
+};
+
+const SECTION_CODE_TO_ID = { qa: 1, lr: 2, va: 3, di: 4, gk: 5 };
+const SECTION_ID_TO_CODE = { 1: 'qa', 2: 'lr', 3: 'va', 4: 'di', 5: 'gk' };
 
 async function uploadImageToSupabase(file: File, pathPrefix: string): Promise<string> {
   const fileName = `${pathPrefix}/${uuidv4()}-${file.name}`;
@@ -144,6 +173,7 @@ export default function CreateQuizPage() {
   const autoSaveTimer = useRef<NodeJS.Timeout | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null });
   const [expandedIndex, setExpandedIndex] = useState(0);
+  const [sectionsEnabled, setSectionsEnabled] = useState(['qa', 'lr', 'va', 'di', 'gk']);
 
   const router = useRouter();
 
@@ -173,6 +203,7 @@ export default function CreateQuizPage() {
             { text: '', image: null, isCorrect: false },
             { text: '', image: null, isCorrect: false },
           ],
+          section_id: SECTION_CODE_TO_ID['qa'],
         },
       ],
     },
@@ -251,6 +282,7 @@ export default function CreateQuizPage() {
               .filter(opt => opt.text);
 
             return {
+              section_id: SECTION_CODE_TO_ID[row.section as keyof typeof SECTION_CODE_TO_ID] || SECTION_CODE_TO_ID['qa'],
               question: row.question || '',
               questionType,
               explanation: row.explanation || '',
@@ -302,6 +334,7 @@ export default function CreateQuizPage() {
           access_code: accessCode,
           is_draft: isDraft,
           user_id: user.id,
+          sections_enabled: data.sectionsEnabled,
         })
         .select('id, access_code')
         .single();
@@ -354,6 +387,7 @@ export default function CreateQuizPage() {
             image_url: questionImageUrl,
             options: processedOptions,
             correct_answers: correctAnswers,
+            section_id: q.section_id,
             blank_answers: null,
             matching_pairs: null
           });
@@ -400,7 +434,14 @@ export default function CreateQuizPage() {
     }
   };
 
-  // Memoized QuestionAccordion
+  const handleSectionToggle = (section: QuizSection) => {
+    if (sectionsEnabled.includes(section)) {
+      setSectionsEnabled(sectionsEnabled.filter((s) => s !== section));
+    } else {
+      setSectionsEnabled([...sectionsEnabled, section]);
+    }
+  };
+
   const QuestionAccordion = React.memo(function QuestionAccordion({ q, i, opts }: { q: any, i: number, opts: any[] }) {
     return (
       <Slide key={q.id} direction="up" in mountOnEnter unmountOnExit>
@@ -417,6 +458,17 @@ export default function CreateQuizPage() {
                 <Typography fontWeight={600} sx={{ color: 'text.primary' }}>{watch(`questions.${i}.question`) || `Question ${i + 1}`}</Typography>
               </Stack>
               <Stack direction="row" spacing={1} alignItems="center" mt={1}>
+                <Chip 
+                  label={SECTION_LABELS[watch(`questions.${i}.section_id`) as QuizSection].title} 
+                  variant="outlined" 
+                  size="small" 
+                  sx={{ 
+                    bgcolor: 'background.paper', 
+                    color: 'text.secondary', 
+                    borderColor: 'grey.300',
+                    fontWeight: 500 
+                  }} 
+                />
                 <Chip label={watch(`questions.${i}.questionType`) === 'multiple' ? 'Multiple' : 'Single'} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
                 <Chip label={`Marks: ${watch(`questions.${i}.marks`)}`} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
               </Stack>
@@ -424,7 +476,6 @@ export default function CreateQuizPage() {
             <Stack direction="row" spacing={1}>
               <Tooltip title="Move Up"><span><IconButton disabled={i === 0} onClick={() => move(i, i - 1)}><ArrowUpwardIcon /></IconButton></span></Tooltip>
               <Tooltip title="Move Down"><span><IconButton disabled={i === questionFields.length - 1} onClick={() => move(i, i + 1)}><ArrowDownwardIcon /></IconButton></span></Tooltip>
-              {/* Duplicate Button */}
               <Tooltip title="Duplicate Question"><span><IconButton color="info" onClick={() => {
                 const questions = methods.getValues('questions');
                 const toDuplicate = { ...questions[i], options: questions[i].options.map((o: any) => ({ ...o })) };
@@ -437,6 +488,7 @@ export default function CreateQuizPage() {
           <AccordionDetails>
             <Stack spacing={2}>
               <TextField label="Question" {...register(`questions.${i}.question`)} fullWidth required error={!!errors.questions?.[i]?.question} helperText={errors.questions?.[i]?.question?.message} />
+              
               {/* Question image upload */}
               <Box display="flex" alignItems="center" gap={2}>
                 {watch(`questions.${i}.image`) && typeof watch(`questions.${i}.image`) === 'string' && (
@@ -477,6 +529,7 @@ export default function CreateQuizPage() {
                   </IconButton>
                 )}
               </Box>
+              
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                 <Select label="Type" value={watch(`questions.${i}.questionType`) as 'single' | 'multiple'} onChange={e => setValue(`questions.${i}.questionType`, e.target.value as 'single' | 'multiple')} fullWidth>
                   <MenuItem value="single">Single Correct</MenuItem>
@@ -484,7 +537,50 @@ export default function CreateQuizPage() {
                 </Select>
                 <TextField label="Marks" type="number" {...register(`questions.${i}.marks`)} fullWidth required error={!!errors.questions?.[i]?.marks} helperText={errors.questions?.[i]?.marks?.message} />
               </Stack>
+              
               <TextField label="Explanation" {...register(`questions.${i}.explanation`)} fullWidth multiline minRows={2} error={!!errors.questions?.[i]?.explanation} helperText={errors.questions?.[i]?.explanation?.message} />
+              
+              {/* Enhanced Section Selection */}
+              <FormControl fullWidth sx={{ mt: 2 }}>
+                <InputLabel>Question Section *</InputLabel>
+                <Select
+                  value={watch(`questions.${i}.section_id`) || SECTION_CODE_TO_ID['qa']}
+                  label="Question Section *"
+                  onChange={(e) => setValue(`questions.${i}.section_id`, parseInt(e.target.value))}
+                  required
+                  sx={{
+                    '& .MuiSelect-select': {
+                      display: 'flex',
+                      alignItems: 'center'
+                    }
+                  }}
+                >
+                  {QuizSectionEnum.options.map((section) => (
+                    <MenuItem 
+                      key={section} 
+                      value={SECTION_CODE_TO_ID[section]}
+                      disabled={sectionsEnabled && !sectionsEnabled.includes(section)}
+                      sx={{
+                        py: 2,
+                        borderLeft: '4px solid',
+                        borderColor: SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['qa'] ? 'primary.main' : 
+                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['lr'] ? 'secondary.main' :
+                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['va'] ? 'success.main' :
+                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['di'] ? 'info.main' :
+                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['gk'] ? 'warning.main' : 'error.main'
+                      }}
+                    >
+                      <Box>
+                        <Typography fontWeight={600}>{SECTION_LABELS[section].title}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {SECTION_LABELS[section].description}
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              
               <Typography variant="subtitle2" sx={{ mt: 1 }}>Options</Typography>
               <Stack spacing={1}>
                 {opts.map((opt, j) => (
@@ -619,7 +715,7 @@ export default function CreateQuizPage() {
                 <input type="file" hidden accept=".csv" onChange={handleCsvUpload} />
               </Button>
               <Typography variant="body2" color="text.secondary">
-                Format: question,option1,option2,option3,option4,correct_answers,explanation,marks
+                Format: question,option1,option2,option3,option4,correct_answers,explanation,marks,section
               </Typography>
             </Stack>
           </Box>
@@ -629,7 +725,7 @@ export default function CreateQuizPage() {
               <Stack spacing={4}>
                 <Typography variant="h4" sx={{ fontWeight: 700, mb: 2 }}>Create Quiz</Typography>
 
-                {/* Quiz Information Section (restored) */}
+                {/* Quiz Information Section */}
                 <Paper elevation={3} sx={{ p: 3, borderRadius: 3, mb: 3 }}>
                   <Typography variant="h6" sx={{ mb: 2, color: 'primary.main' }}>Quiz Information</Typography>
                   <Stack spacing={2}>
@@ -668,6 +764,51 @@ export default function CreateQuizPage() {
                   </Stack>
                 </Paper>
 
+                {/* Section Enable/Disable Checkboxes */}
+                <Paper sx={{ p: 3, mb: 3, borderRadius: 3, boxShadow: 2 }}>
+                  <Typography variant="h6" fontWeight={700} gutterBottom>
+                    Select Sections to Enable
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    Enable the sections you want to include in this quiz. You can assign questions to these sections.
+                  </Typography>
+                  <FormGroup row sx={{ gap: 2 }}>
+                    {QuizSectionEnum.options.map((section) => (
+                      <Paper 
+                        key={section}
+                        elevation={sectionsEnabled?.includes(section) ? 3 : 1}
+                        sx={{ 
+                          p: 2, 
+                          borderRadius: 2, 
+                          border: '1px solid', 
+                          borderColor: sectionsEnabled?.includes(section) ? 'primary.main' : 'divider',
+                          minWidth: 200,
+                          flexGrow: 1
+                        }}
+                      >
+                        <FormControlLabel
+                          control={
+                            <Checkbox
+                              checked={Array.isArray(sectionsEnabled) && sectionsEnabled.includes(section)}
+                              onChange={() => handleSectionToggle(section)}
+                              color="primary"
+                            />
+                          }
+                          label={
+                            <Box>
+                              <Typography fontWeight={600}>{SECTION_LABELS[section].title}</Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {SECTION_LABELS[section].description}
+                              </Typography>
+                            </Box>
+                          }
+                          sx={{ width: '100%' }}
+                        />
+                      </Paper>
+                    ))}
+                  </FormGroup>
+                </Paper>
+
                 {/* Question Navigation Bar */}
                 <Paper elevation={2} sx={{ p: 2, borderRadius: 2, mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', bgcolor: 'background.paper', boxShadow: 1 }}>
                   {questionFields.map((q, i) => {
@@ -678,14 +819,23 @@ export default function CreateQuizPage() {
                         key={q.id}
                         label={`Q${i + 1}`}
                         variant={expandedIndex === i ? 'filled' : 'outlined'}
-                        color="default"
+                        color={isComplete ? 'primary' : 'default'}
                         clickable
                         onClick={() => {
                           setExpandedIndex(i);
                           const el = document.getElementById(`question-accordion-${i}`);
                           if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         }}
-                        sx={{ fontWeight: 500, fontSize: '0.98rem', mx: 0.5, my: 0.5, bgcolor: 'background.paper', color: 'text.primary', borderColor: 'grey.400', boxShadow: 0 }}
+                        sx={{ 
+                          fontWeight: 500, 
+                          fontSize: '0.98rem', 
+                          mx: 0.5, 
+                          my: 0.5, 
+                          bgcolor: expandedIndex === i ? 'primary.main' : 'background.paper',
+                          color: expandedIndex === i ? 'primary.contrastText' : 'text.primary',
+                          borderColor: 'grey.400',
+                          boxShadow: 0 
+                        }}
                       />
                     );
                   })}
@@ -703,6 +853,7 @@ export default function CreateQuizPage() {
                     color="primary"
                     onClick={() =>
                       append({
+                        section_id: SECTION_CODE_TO_ID['qa'],
                         question: '',
                         questionType: 'single',
                         image: null,

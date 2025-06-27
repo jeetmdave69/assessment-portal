@@ -315,6 +315,7 @@ export default function EditQuizPage() {
                       explanation: "",
                       questionType: 'single',
                       marks: '1',
+                      section_id: 1,
                       options: [
                         { text: "", image: null, isCorrect: false },
                         { text: "", image: null, isCorrect: false },
