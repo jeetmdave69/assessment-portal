@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import {
   Box,
@@ -27,6 +27,19 @@ import {
   Typography,
   Radio,
   RadioGroup,
+  Alert,
+  Tabs,
+  Tab,
+  Drawer,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Avatar,
+  Badge,
+  Fab,
+  Collapse,
+  Snackbar
 } from '@mui/material'
 import { motion } from 'framer-motion'
 import { supabase } from '@/utils/supabaseClient'
@@ -44,8 +57,23 @@ import {
   HelpOutline as HelpOutlineIcon,
   Fullscreen as FullscreenIcon,
   FullscreenExit as FullscreenExitIcon,
+  Dashboard as DashboardIcon,
+  Book as BookIcon,
+  BarChart as BarChartIcon,
+  Message as MessageIcon,
+  Settings as SettingsIcon,
+  Help as HelpIcon,
+  Logout as LogoutIcon,
+  Visibility as VisibilityIcon,
+  VisibilityOff as VisibilityOffIcon,
+  Palette as PaletteIcon,
+  TextFields as TextFieldsIcon,
+  ExpandMore as ExpandMoreIcon,
+  ChevronRight as ChevronRightIcon
 } from '@mui/icons-material'
+import debounce from 'lodash.debounce'
 
+// Types
 interface Option {
   text: string
   isCorrect: boolean
@@ -57,6 +85,8 @@ interface Question {
   section_id: number
   marks?: number
   question_type: string
+  explanation?: string
+  difficulty?: 'easy' | 'medium' | 'hard'
 }
 interface Quiz {
   id: number
@@ -65,114 +95,143 @@ interface Quiz {
   duration: number
   max_attempts: number
   passing_score?: number
+  show_answers?: boolean
+  start_time?: string
+  end_time?: string
+}
+interface Section {
+  id: number
+  name: string
+  description?: string
+  instructions?: string
+  marks?: number
 }
 
-// Navigation color constants for formal, assessment-portal style
+// Constants
+const THEMES = {
+  default: {
+    primary: '#002366',
+    secondary: '#e3e6ef',
+    text: '#212121',
+    background: '#f7f9fa'
+  },
+  dark: {
+    primary: '#002366',
+    secondary: '#222',
+    text: '#fff',
+    background: '#181c24'
+  },
+  sepia: {
+    primary: '#002366',
+    secondary: '#e3e6ef',
+    text: '#212121',
+    background: '#f7f9fa'
+  }
+}
+
+// Add navigation and difficulty color constants
 const NAV_COLORS = {
-  attempted: '#222', // dark gray for attempted
-  unattempted: '#fff', // white for unattempted
-  current: '#e0e0e0', // light gray for current
-  flagged: '#fff', // white, but with red flag icon
-  bookmarked: '#fffbe6', // pale yellow for bookmarked
-  borderAttempted: '#222',
-  borderUnattempted: '#bbb',
-  borderCurrent: '#222',
-  borderBookmarked: '#e6b800',
+  attempted: '#1976d2', // Blue for answered
+  unattempted: '#e0e0e0', // Light gray for unanswered
+  current: '#002366', // Deep blue for current
+  flagged: '#f44336', // Red for flagged
+  bookmarked: '#ffb300', // Amber for bookmarked
+  markedForReview: '#7b1fa2', // Purple for review
+  borderAttempted: '#1565c0',
+  borderUnattempted: '#bdbdbd',
+  borderCurrent: '#002366',
+  borderMarkedForReview: '#7b1fa2',
+  borderBookmarked: '#ffb300'
+}
+
+const DIFFICULTY_COLORS: Record<string, string> = {
+  easy: '#43a047',      // Green
+  medium: '#ffa000',    // Amber
+  hard: '#d32f2f'       // Red
 }
 
 const QuestionButton = ({
+  q,
   idx,
-  current,
-  answers,
-  flagged,
-  questions,
-  setCurrent,
-  submitted,
-  toggleFlag,
-  bookmarked,
+  isCurrent,
+  isAnswered,
+  isFlagged,
+  isBookmarked,
+  isMarkedForReview,
+  onClick,
+  disabled
 }: {
+  q: Question
   idx: number
-  current: number
-  answers: Record<number, string[]>
-  flagged: Record<number, boolean>
-  questions: Question[]
-  setCurrent: (index: number) => void
-  submitted: boolean
-  toggleFlag: (qid: number) => void
-  bookmarked: Record<number, boolean>
+  isCurrent: boolean
+  isAnswered: boolean
+  isFlagged: boolean
+  isBookmarked: boolean
+  isMarkedForReview: boolean
+  onClick: () => void
+  disabled: boolean
 }) => {
-  const done = !!answers[questions[idx].id]
-  const isFlagged = flagged[questions[idx].id]
-  const isCurrent = idx === current
-  const isBookmarked = bookmarked[questions[idx].id]
-
   // Determine color scheme
   let bgcolor = NAV_COLORS.unattempted
-  let color = '#222'
-  let border = `1.5px solid ${NAV_COLORS.borderUnattempted}`
+  let color = '#212121'
+  let border = `1px solid ${NAV_COLORS.borderUnattempted}`
+  
   if (isCurrent) {
     bgcolor = NAV_COLORS.current
     border = `2px solid ${NAV_COLORS.borderCurrent}`
-    color = '#222'
+    color = '#ffffff'
+  } else if (isMarkedForReview) {
+    bgcolor = NAV_COLORS.markedForReview
+    border = `1px solid ${NAV_COLORS.borderMarkedForReview}`
+    color = '#ffffff'
   } else if (isBookmarked) {
     bgcolor = NAV_COLORS.bookmarked
-    border = `1.5px solid ${NAV_COLORS.borderBookmarked}`
-    color = '#222'
-  } else if (done) {
+    border = `1px solid ${NAV_COLORS.borderBookmarked}`
+  } else if (isAnswered) {
     bgcolor = NAV_COLORS.attempted
-    border = `1.5px solid ${NAV_COLORS.borderAttempted}`
-    color = '#fff'
+    border = `1px solid ${NAV_COLORS.borderAttempted}`
+    color = '#ffffff'
+  } else if (isFlagged) {
+    bgcolor = NAV_COLORS.flagged
+    border = `1px solid ${NAV_COLORS.borderUnattempted}`
+    color = '#ffffff'
   }
 
   return (
-    <Box position="relative" sx={{ display: 'inline-block' }}>
+    <Box position="relative" sx={{ display: 'inline-block', m: 0.5 }}>
       <Button
-        size="medium"
+        size="small"
         variant="contained"
         sx={{
-          minWidth: 40,
-          minHeight: 40,
-          borderRadius: '8px',
-          fontSize: '1rem',
+          minWidth: 36,
+          minHeight: 36,
+          borderRadius: '4px',
+          fontSize: '0.875rem',
           fontWeight: isCurrent ? 700 : 500,
           boxShadow: isCurrent ? 2 : 0,
           border,
           bgcolor,
-          color,
+          color: isAnswered ? 'primary' : 'inherit',
           transition: 'all 0.2s',
           p: 0,
+          '&:hover': {
+            transform: 'scale(1.05)'
+          }
         }}
-        onClick={() => setCurrent(idx)}
-        disabled={submitted}
+        onClick={onClick}
+        disabled={disabled}
       >
         {idx + 1}
       </Button>
-      <IconButton
-        size="small"
-        onClick={e => {
-          e.stopPropagation()
-          toggleFlag(questions[idx].id)
-        }}
-        sx={{
+      {isFlagged && (
+        <FlagIcon sx={{
           position: 'absolute',
-          top: -8,
-          right: -8,
-          zIndex: 2,
-          bgcolor: '#fff',
-          p: 0.5,
-          border: isFlagged ? '1.5px solid #d32f2f' : '1.5px solid #eee',
-          boxShadow: 1,
-          '&:hover': {
-            bgcolor: '#f5f5f5',
-          },
-        }}
-      >
-        {isFlagged ? (
-          <FlagIcon sx={{ color: '#d32f2f' }} fontSize="small" />
-        ) : (
-          <FlagOutlinedIcon sx={{ color: '#bbb' }} fontSize="small" />
-        )}
-      </IconButton>
+          top: -6,
+          right: -6,
+          color: '#f44336',
+          fontSize: '0.75rem'
+        }} />
+      )}
     </Box>
   )
 }
@@ -183,940 +242,1316 @@ export default function AttemptQuizPage() {
   const router = useRouter()
   const { user } = useUser()
 
-  if (!quizId) {
-    return (
-      <Container sx={{ mt: 4 }}>
-        <Typography color="error">Invalid quiz URL – no quizId provided.</Typography>
-      </Container>
-    )
-  }
-
+  // State management
   const [quiz, setQuiz] = useState<Quiz | null>(null)
   const [questions, setQuestions] = useState<Question[]>([])
   const [answers, setAnswers] = useState<Record<number, string[]>>({})
   const [flagged, setFlagged] = useState<Record<number, boolean>>({})
   const [bookmarked, setBookmarked] = useState<Record<number, boolean>>({})
-  const [current, setCurrent] = useState(0)
+  const [markedForReview, setMarkedForReview] = useState<Record<number, boolean>>({})
+  const [currentSection, setCurrentSection] = useState<number | null>(null)
+  const [currentQuestionId, setCurrentQuestionId] = useState<number>(0)
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [totalTime, setTotalTime] = useState(0)
   const [loading, setLoading] = useState(true)
   const [submitted, setSubmitted] = useState(false)
   const [attemptCount, setAttemptCount] = useState(0)
-  const [attemptsLoading, setAttemptsLoading] = useState(true)
   const [errorPopup, setErrorPopup] = useState<string | null>(null)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [timeUpDialogOpen, setTimeUpDialogOpen] = useState(false)
   const [autoSubmitting, setAutoSubmitting] = useState(false)
-  const [sections, setSections] = useState<{ id: number; name: string; code: string }[]>([])
+  const [sections, setSections] = useState<Section[]>([])
   const [fullscreen, setFullscreen] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [reviewMode, setReviewMode] = useState(false)
+  const [showAnswerKey, setShowAnswerKey] = useState(false)
+  const [theme, setTheme] = useState<'default' | 'dark' | 'sepia'>('default')
+  const [fontSize, setFontSize] = useState<'normal' | 'large' | 'xlarge'>('normal')
+  const [showNavigationPanel, setShowNavigationPanel] = useState(true)
+  const [showSectionInstructions, setShowSectionInstructions] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [expandedSections, setExpandedSections] = useState<Record<number, boolean>>({})
+  const [redirectMessage, setRedirectMessage] = useState<string | null>(null)
+  const [violationCount, setViolationCount] = useState(0)
+  const [submittingModalOpen, setSubmittingModalOpen] = useState(false)
+  const [resumeNotification, setResumeNotification] = useState(false)
 
-  // Anti-cheat measures
+  // Refs
+  const questionRefs = useRef<Record<number, HTMLDivElement | null>>({})
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Initialize expanded sections
   useEffect(() => {
-    const killKeys = (e: KeyboardEvent) => {
-      const combo = `${e.ctrlKey ? 'Control+' : ''}${e.metaKey ? 'Meta+' : ''}${e.shiftKey ? 'Shift+' : ''}${e.key}`
-      const blocked = ['F12', 'Control+Shift+I', 'Control+Shift+J', 'Control+U', 'Control+C', 'Meta+C']
-      if (blocked.includes(combo) || e.key === 'F12') e.preventDefault()
+    if (sections.length > 0) {
+      const initialExpanded: Record<number, boolean> = {}
+      sections.forEach(section => {
+        initialExpanded[section.id] = true
+      })
+      setExpandedSections(initialExpanded)
     }
-    const killMenu = (e: MouseEvent) => e.preventDefault()
-    document.addEventListener('keydown', killKeys)
-    document.addEventListener('contextmenu', killMenu)
+  }, [sections])
 
-    const prev = document.body.style.userSelect
-    document.body.style.userSelect = 'none'
-
-    return () => {
-      document.removeEventListener('keydown', killKeys)
-      document.removeEventListener('contextmenu', killMenu)
-      document.body.style.userSelect = prev
-    }
-  }, [])
+  // Toggle section expansion
+  const toggleSection = (sectionId: number) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [sectionId]: !prev[sectionId]
+    }))
+  }
 
   // Fetch quiz data
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Fetch quiz details
         const { data: quizData, error: quizError } = await supabase
           .from('quizzes')
           .select('*')
           .eq('id', quizId)
           .single()
-
+        console.log('quizData:', quizData, 'quizError:', quizError);
         if (quizError) throw quizError
+        if (!quizData) throw new Error('Quiz not found')
+        setQuiz(quizData)
 
-        // Fetch sections
+        // Fetch sections for this quiz
         const { data: sectionData, error: sectionError } = await supabase
           .from('sections')
-          .select('id, name, code')
+          .select('*')
+          .eq('quiz_id', quizId)
+          .order('id', { ascending: true })
         if (sectionError) throw sectionError
         setSections(sectionData || [])
 
-        // Fetch questions with section_id
+        // Fetch questions
         const { data: questionData, error: questionError } = await supabase
           .from('questions')
           .select('*')
           .eq('quiz_id', quizId)
-
+          .order('id', { ascending: true })
+        console.log('questionData:', questionData, 'questionError:', questionError);
         if (questionError) throw questionError
 
-        const parsed: Question[] = (questionData ?? []).map((q: any) => {
-          let correctRaw = q.correct_answers
-          if (typeof correctRaw === 'string') {
-            try {
-              correctRaw = JSON.parse(correctRaw)
-            } catch {
-              correctRaw = [correctRaw]
-            }
-          }
-          if (!Array.isArray(correctRaw)) {
-            correctRaw = [correctRaw]
-          }
-          const correct = correctRaw.map((s: string) => (s ?? '').toString().trim().toLowerCase())
-          let raw: any[] = []
-          if (typeof q.options === 'string') {
-            try {
-              raw = JSON.parse(q.options)
-            } catch {
-              raw = []
-            }
-          } else if (Array.isArray(q.options)) {
-            raw = q.options
-          } else {
-            raw = []
-          }
-          const opts =
-            typeof raw[0] === 'string'
-              ? raw.map((t: string) => ({ text: t.trim(), isCorrect: correct.includes(t.trim().toLowerCase()) }))
-              : raw.map((o: any) => ({ text: o.text.trim(), isCorrect: correct.includes(o.text.trim().toLowerCase()) }))
-          return { 
-            id: q.id, 
-            question_text: q.question_text, 
-            options: opts, 
-            section_id: q.section_id,
-            marks: q.marks || 1,
-            question_type: q.question_type || 'multi'
-          }
-        })
+        const parsedQuestions = (questionData || []).map(q => ({
+          id: q.id,
+          question_text: q.question_text,
+          options: q.options.map((opt: any) => ({
+            text: opt.text,
+            isCorrect: opt.is_correct
+          })),
+          section_id: q.section_id,
+          marks: q.marks || 1,
+          question_type: q.question_type || 'single',
+          explanation: q.explanation,
+          difficulty: q.difficulty || 'medium'
+        }))
 
-        setQuiz(quizData)
-        setQuestions(parsed)
+        setQuestions(parsedQuestions)
 
-        // Initialize flagged questions from localStorage
-        const savedFlags = localStorage.getItem(`quiz-${quizId}-flags`)
-        if (savedFlags) {
-          setFlagged(JSON.parse(savedFlags))
+        // Initialize time (persistent timer)
+        const durationInSeconds = (quizData.duration || 30) * 60
+        setTotalTime(durationInSeconds)
+        let startTime = localStorage.getItem(`quiz-${quizId}-startTime`)
+        if (!startTime) {
+          startTime = Date.now().toString()
+          localStorage.setItem(`quiz-${quizId}-startTime`, startTime)
+        }
+        const elapsed = Math.floor((Date.now() - parseInt(startTime, 10)) / 1000)
+        const remaining = durationInSeconds - elapsed
+        setTimeLeft(remaining > 0 ? remaining : 0)
+
+        // Load saved state
+        const savedState = localStorage.getItem(`quiz-${quizId}-state`)
+        if (savedState) {
+          const { answers, flags, bookmarks, reviews } = JSON.parse(savedState)
+          setAnswers(answers || {})
+          setFlagged(flags || {})
+          setBookmarked(bookmarks || {})
+          setMarkedForReview(reviews || {})
         }
 
-        // Initialize bookmarked questions from localStorage
-        const savedBookmarks = localStorage.getItem(`quiz-${quizId}-bookmarks`)
-        if (savedBookmarks) {
-          setBookmarked(JSON.parse(savedBookmarks))
+        if ((sectionData || []).length > 0) {
+          setCurrentSection(sectionData[0].id)
         }
-
-        const secs = (quizData?.duration ?? 30) * 60
-        setTotalTime(secs)
-        setTimeLeft(secs)
       } catch (error) {
-        console.error('Error fetching quiz data:', error)
-        setErrorPopup('Failed to load quiz data. Please try again.')
+        console.error('Error loading quiz:', error, JSON.stringify(error, null, 2));
+        setErrorPopup('Failed to load quiz. Please try again.');
       } finally {
         setLoading(false)
       }
     }
-    fetchData()
+
+    if (quizId) fetchData()
   }, [quizId])
 
-  // Save flagged questions to localStorage
-  useEffect(() => {
-    if (quizId && Object.keys(flagged).length > 0) {
-      localStorage.setItem(`quiz-${quizId}-flags`, JSON.stringify(flagged))
-    }
-  }, [flagged, quizId])
+  // Group questions by section_id
+  const questionsBySection = useMemo(() => {
+    const groups: Record<number, Question[]> = {}
+    questions.forEach(q => {
+      if (!groups[q.section_id]) groups[q.section_id] = []
+      groups[q.section_id].push(q)
+    })
+    return groups
+  }, [questions])
 
-  // Save bookmarked questions to localStorage
-  useEffect(() => {
-    if (quizId && Object.keys(bookmarked).length > 0) {
-      localStorage.setItem(`quiz-${quizId}-bookmarks`, JSON.stringify(bookmarked))
-    }
-  }, [bookmarked, quizId])
+  // Get current question
+  const currentQuestion = useMemo(() => {
+    return questions.find(q => q.id === currentQuestionId) || questions[0]
+  }, [currentQuestionId, questions])
 
-  // Fetch attempt count
-  useEffect(() => {
-    const fetchAttempts = async () => {
-      if (!user) return
-      try {
-        const { data, error } = await supabase
-          .from('attempts')
-          .select('id')
-          .eq('quiz_id', quizId)
-          .eq('user_id', user.id)
+  // Calculate answered count
+  const answeredCount = useMemo(() => {
+    return Object.keys(answers).length
+  }, [answers])
 
-        if (error) throw error
-        setAttemptCount(data?.length ?? 0)
-      } catch (error) {
-        console.error('Error fetching attempts:', error)
-        setErrorPopup('Failed to load attempt history')
-      } finally {
-        setAttemptsLoading(false)
-      }
-    }
-    fetchAttempts()
-  }, [user, quizId])
-
-  // Timer countdown
-  useEffect(() => {
-    if (submitted || timeLeft === null || timeLeft <= 0) return
-
-    const timerId = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev === null || prev <= 0) {
-          clearInterval(timerId)
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
-
-    return () => clearInterval(timerId)
-  }, [submitted, timeLeft])
-
-  // Handle timeout when time reaches 0
-  useEffect(() => {
-    if (timeLeft === 0 && !submitted) {
-      handleTimeout()
-    }
-  }, [timeLeft, submitted])
-
-  const formatTime = (s: number) => {
-    const safe = Math.max(0, s ?? 0)
-    return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`
+  // Format time display
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
-  const progress = useMemo(() => {
+  // Timer progress
+  const timerProgress = useMemo(() => {
     if (timeLeft === null || totalTime === 0) return 0
-    const safeLeft = Math.max(0, timeLeft)
-    return ((totalTime - safeLeft) / totalTime) * 100
+    return ((totalTime - timeLeft) / totalTime) * 100
   }, [timeLeft, totalTime])
 
-  const answeredCount = Object.keys(answers).length
-  const q = questions[current]
+  // Current theme
+  const currentTheme = THEMES[theme]
+  const fontSizeStyles = {
+    normal: { fontSize: '1rem' },
+    large: { fontSize: '1.2rem' },
+    xlarge: { fontSize: '1.4rem' }
+  }
 
-  const toggleFlag = useCallback((qid: number) => {
-    setFlagged(prev => ({
-      ...prev,
-      [qid]: !prev[qid]
-    }))
-  }, [])
+  // Navigation handlers
+  const goToQuestion = (questionId: number) => {
+    setCurrentQuestionId(questionId);
+    // Find the section of the selected question
+    const q = questions.find(q => q.id === questionId);
+    if (q) setCurrentSection(q.section_id);
+    questionRefs.current[questionId]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    });
+  }
 
-  const toggleBookmark = useCallback((qid: number) => {
-    setBookmarked(prev => ({
-      ...prev,
-      [qid]: !prev[qid]
-    }))
-  }, [])
+  const goToNextQuestionFlat = () => {
+    const idx = questions.findIndex(q => q.id === currentQuestionId);
+    if (idx < questions.length - 1) {
+      const nextQ = questions[idx + 1];
+      setCurrentQuestionId(nextQ.id);
+      setCurrentSection(nextQ.section_id);
+    }
+  };
 
-  const handleCheckboxChange = useCallback((qid: number, opt: string) => {
+  const goToPrevQuestionFlat = () => {
+    const idx = questions.findIndex(q => q.id === currentQuestionId);
+    if (idx > 0) {
+      const prevQ = questions[idx - 1];
+      setCurrentQuestionId(prevQ.id);
+      setCurrentSection(prevQ.section_id);
+    }
+  };
+
+  // Add handler for Next Section
+  const goToNextSection = () => {
+    const sectionIds = sections.map(s => s.id);
+    const currentSectionIndex = sectionIds.indexOf(currentSection ?? -1);
+    if (currentSectionIndex < sectionIds.length - 1) {
+      const nextSectionId = sectionIds[currentSectionIndex + 1];
+      const nextSectionQuestions = questionsBySection[nextSectionId] || [];
+      if (nextSectionQuestions.length > 0) {
+        setCurrentSection(nextSectionId);
+        setCurrentQuestionId(nextSectionQuestions[0].id);
+      }
+    }
+  };
+
+  // Answer handlers
+  const handleOptionSelect = (questionId: number, optionText: string, questionType: string) => {
     setAnswers(prev => {
-      const prevAns = prev[qid] || []
-      return {
-        ...prev,
-        [qid]: prevAns.includes(opt)
-          ? prevAns.filter(t => t !== opt)
-          : [...prevAns, opt]
+      if (questionType === 'single') {
+        return { ...prev, [questionId]: [optionText] }
+      } else {
+        const currentAnswers = prev[questionId] || []
+        return {
+          ...prev,
+          [questionId]: currentAnswers.includes(optionText)
+            ? currentAnswers.filter(a => a !== optionText)
+            : [...currentAnswers, optionText]
+        }
       }
     })
-  }, [])
+  }
 
-  const buildPayload = () => {
+  // Flag and bookmark handlers
+  const toggleFlag = (questionId: number) => {
+    setFlagged(prev => ({ ...prev, [questionId]: !prev[questionId] }))
+  }
+
+  const toggleBookmark = (questionId: number) => {
+    setBookmarked(prev => ({ ...prev, [questionId]: !prev[questionId] }))
+  }
+
+  const toggleMarkForReview = (questionId: number) => {
+    setMarkedForReview(prev => ({ ...prev, [questionId]: !prev[questionId] }))
+  }
+
+  // Fullscreen handler
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(console.error)
+      setFullscreen(true)
+    } else {
+      document.exitFullscreen()
+      setFullscreen(false)
+    }
+  }
+
+  // Submit handlers
+  const handleSubmit = async () => {
+    setConfirmDialogOpen(true)
+  }
+
+  // Security: Tab/Window Switch & Fullscreen Exit Detection
+  useEffect(() => {
+    const handleVisibility = (e: Event) => {
+      if (document.visibilityState === 'hidden') {
+        setViolationCount((prev) => {
+          const next = prev + 1;
+          setErrorPopup('You switched tabs/windows. This is not allowed during the exam.');
+          if (next >= 3 && !submitted) {
+            handleSubmit();
+          }
+          return next;
+        });
+      }
+    };
+    const handleFullscreenChange = (e: Event) => {
+      if (!document.fullscreenElement) {
+        setViolationCount((prev) => {
+          const next = prev + 1;
+          setErrorPopup('You exited fullscreen. Please return to fullscreen.');
+          if (next >= 3 && !submitted) {
+            handleSubmit();
+          }
+          return next;
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, [submitted]);
+
+  // Security: Prevent right-click, copy, cut, paste, and print
+  useEffect(() => {
+    const prevent = (e: Event) => e.preventDefault();
+    const preventKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && ['c', 'x', 'v', 'p'].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+      // Prevent Print
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('contextmenu', prevent);
+    document.addEventListener('copy', prevent);
+    document.addEventListener('cut', prevent);
+    document.addEventListener('paste', prevent);
+    document.addEventListener('keydown', preventKey);
+    return () => {
+      document.removeEventListener('contextmenu', prevent);
+      document.removeEventListener('copy', prevent);
+      document.removeEventListener('cut', prevent);
+      document.removeEventListener('paste', prevent);
+      document.removeEventListener('keydown', preventKey);
+    };
+  }, []);
+
+  // Restore progress from server on mount
+  useEffect(() => {
+    if (!quizId || !user?.id) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/quiz-progress?quiz_id=${quizId}&user_id=${user.id}`);
+        const { data } = await res.json();
+        if (data) {
+          // Restore server progress
+          setAnswers(data.answers || {});
+          setFlagged(data.flagged || {});
+          setBookmarked(data.bookmarked || {});
+          setMarkedForReview(data.marked_for_review || {});
+          if (data.start_time) {
+            localStorage.setItem(`quiz-${quizId}-startTime`, new Date(data.start_time).getTime().toString());
+          }
+          // Set current question to first answered or first question
+          const answeredQ = Object.keys(data.answers || {});
+          if (answeredQ.length > 0) {
+            const firstQ = questions.find(q => q.id === Number(answeredQ[0]));
+            if (firstQ) {
+              setCurrentQuestionId(firstQ.id);
+              setCurrentSection(firstQ.section_id);
+            }
+          }
+          setResumeNotification(true);
+        }
+      } catch (e) {
+        // Ignore fetch errors
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizId, user?.id]);
+
+  // Debounced server auto-save
+  const debouncedSaveProgress = useRef(
+    debounce(async (progress) => {
+      if (!quizId || !user?.id) return;
+      await fetch('/api/quiz-progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quiz_id: quizId,
+          user_id: user.id,
+          answers: progress.answers,
+          flagged: progress.flagged,
+          bookmarked: progress.bookmarked,
+          marked_for_review: progress.markedForReview,
+          start_time: localStorage.getItem(`quiz-${quizId}-startTime`) ? new Date(Number(localStorage.getItem(`quiz-${quizId}-startTime`))).toISOString() : undefined,
+        })
+      });
+    }, 5000)
+  ).current;
+
+  // Watch for changes and auto-save
+  useEffect(() => {
+    debouncedSaveProgress({ answers, flagged, bookmarked, markedForReview });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, flagged, bookmarked, markedForReview, currentQuestionId]);
+
+  // Backend validation: On submission, check time and attempt count
+  const confirmSubmit = async () => {
+    setConfirmDialogOpen(false)
+    setSubmittingModalOpen(true)
+    setSubmitted(true)
+    try {
+      // Prepare correct answers
+      const correctAnswers: Record<number, string[]> = {}
+      questions.forEach(q => {
+        correctAnswers[q.id] = q.options.filter(o => o.isCorrect).map(o => o.text)
+      })
+      // Calculate extra fields
+      const totalQuestions = questions.length;
+      const scoreObj = calculateScore();
+      const correctCount = scoreObj.score;
+      const percentage = scoreObj.percentage;
+      const status = 1;
+      // Backend validation: Check time and attempt count
+      // Fetch latest attempt count and quiz start time from DB
+      const { data: attemptsData, error: attemptsError } = await supabase
+        .from('attempts')
+        .select('id,submitted_at')
+        .eq('quiz_id', Number(quizId))
+        .eq('user_id', user?.id);
+      if (attemptsError) throw attemptsError;
+      if (attemptsData && attemptsData.length >= (quiz?.max_attempts || 1)) {
+        setErrorPopup('You have reached the maximum number of attempts for this quiz.');
+        setSubmitted(false);
+        return;
+      }
+      // Check time (server-side)
+      const now = new Date();
+      const quizStart = quiz?.start_time ? new Date(quiz.start_time) : null;
+      const quizEnd = quiz?.end_time ? new Date(quiz.end_time) : null;
+      if (quizStart && now < quizStart) {
+        setErrorPopup('Quiz has not started yet.');
+        setSubmitted(false);
+        return;
+      }
+      if (quizEnd && now > quizEnd) {
+        setErrorPopup('Quiz time is over.');
+        setSubmitted(false);
+        return;
+      }
+      // Prepare submission data
+      const submissionData = {
+        quiz_id: Number(quizId),
+        user_id: user?.id,
+        user_name: user?.fullName || 'Anonymous',
+        answers,
+        correct_answers: correctAnswers,
+        submitted_at: new Date().toISOString(),
+        score: correctCount,
+        total_questions: totalQuestions,
+        correct_count: correctCount,
+        percentage,
+        status,
+        marked_for_review: markedForReview
+      }
+      // Save to database
+      const { error } = await supabase
+        .from('attempts')
+        .insert([submissionData])
+      if (error) throw error
+      // After successful submission, delete progress
+      await fetch('/api/quiz-progress', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quiz_id: quizId, user_id: user?.id })
+      });
+      setRedirectMessage('Quiz submitted! Redirecting to dashboard...')
+      setTimeout(() => {
+        setSubmittingModalOpen(false)
+        router.push('/dashboard/student')
+      }, 3500)
+    } catch (error) {
+      console.error('Submission error:', JSON.stringify(error, null, 2))
+      setErrorPopup('Failed to submit. Please try again.')
+      setSubmitted(false)
+    }
+  }
+
+  // Score calculation
+  const calculateScore = () => {
     let score = 0
     let totalMarks = 0
     let obtainedMarks = 0
-    const userAns: Record<number, string[]> = {}
-    const correctMap: Record<number, string[]> = {}
 
-    questions.forEach(qq => {
-      const ua = answers[qq.id]?.map(s => s.trim().toLowerCase()) ?? []
-      userAns[qq.id] = ua
-      const correct = qq.options
-        .filter(o => o.isCorrect)
-        .map(o => o.text.trim().toLowerCase())
-      correctMap[qq.id] = correct
-      
-      const questionMarks = qq.marks || 1
+    questions.forEach(q => {
+      const userAnswer = answers[q.id] || []
+      const correctAnswers = q.options.filter(o => o.isCorrect).map(o => o.text)
+      const questionMarks = q.marks || 1
       totalMarks += questionMarks
-      
-      if (ua.length === correct.length && ua.every(a => correct.includes(a))) {
+
+      // Check if answer is correct
+      if (
+        userAnswer.length === correctAnswers.length &&
+        userAnswer.every(a => correctAnswers.includes(a))
+      ) {
         score += 1
         obtainedMarks += questionMarks
       }
     })
 
-    return { userAns, correctMap, score, totalMarks, obtainedMarks }
+    const percentage = Math.round((obtainedMarks / totalMarks) * 100)
+    const passed = quiz?.passing_score ? obtainedMarks >= quiz.passing_score : percentage >= 60
+
+    return { score, totalMarks, obtainedMarks, percentage, passed }
   }
 
-  const submitToDB = async (payload: {
-    userAns: any
-    correctMap: any
-    score: number
-    totalMarks: number
-    obtainedMarks: number
-  }) => {
-    if (!user) {
-      setErrorPopup('You must be logged in to submit')
-      return { data: null, error: new Error('User not logged in') }
+  // Timer countdown effect
+  useEffect(() => {
+    if (submitted || timeLeft === null) return;
+    if (timeLeft <= 0) {
+      handleSubmit();
+      return;
     }
-
-    try {
-      console.log('Submitting payload:', payload)
-
-      const { data, error } = await supabase
-        .from('attempts')
-        .insert([{
-          quiz_id: Number(quizId),
-          user_id: user.id,
-          user_name: user.fullName || 'Unknown User',
-          answers: payload.userAns,
-          correct_answers: payload.correctMap,
-          submitted_at: new Date().toISOString(),
-          score: payload.score,
-          total_marks: payload.totalMarks,
-          obtained_marks: payload.obtainedMarks,
-          passing_score: quiz?.passing_score || Math.ceil(payload.totalMarks * 0.6),
-        }])
-        .select('id')
-        .single()
-
-      if (error) {
-        console.error('Supabase error details:', error)
-        throw error
+    const timer = setInterval(() => {
+      // Always recalculate timeLeft from startTime for robustness
+      const startTime = localStorage.getItem(`quiz-${quizId}-startTime`)
+      if (startTime) {
+        const elapsed = Math.floor((Date.now() - parseInt(startTime, 10)) / 1000)
+        const remaining = totalTime - elapsed
+        setTimeLeft(remaining > 0 ? remaining : 0)
       }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft, submitted, quizId, totalTime]);
 
-      console.log('Submission successful:', data)
-      return { data, error: null }
-    } catch (error) {
-      console.error('Full submission error:', error)
-      return {
-        data: null,
-        error: error instanceof Error ? error : new Error('Submission failed')
-      }
-    }
-  }
-
-  const handleSubmitClick = () => setConfirmDialogOpen(true)
-
-  const confirmSubmission = async () => {
-    setConfirmDialogOpen(false)
-
-    if (!user) {
-      setErrorPopup('You must be logged in to submit')
-      return
-    }
-
-    if (quiz && attemptCount >= quiz.max_attempts) {
-      setErrorPopup('Maximum attempts reached')
-      return
-    }
-
-    setSubmitted(true)
-    setAutoSubmitting(true)
-
-    try {
-      const payload = buildPayload()
-      console.log('Attempting submission with payload:', payload)
-
-      const { data, error } = await submitToDB(payload)
-
-      if (error) {
-        console.error('Submission failed with error:', error)
-        setErrorPopup(`Submission failed: ${error.message}`)
-        setSubmitted(false)
-        return
-      }
-
-      if (!data) {
-        console.error('Submission failed - no data returned')
-        setErrorPopup('Submission failed - please try again')
-        setSubmitted(false)
-        return
-      }
-
-      console.log('Submission successful, redirecting to result:', data.id)
-      router.push(`/result/${data.id}`)
-    } catch (error) {
-      console.error('Unexpected submission error:', error)
-      setErrorPopup('An unexpected error occurred during submission')
-      setSubmitted(false)
-    } finally {
-      setAutoSubmitting(false)
-    }
-  }
-
-  const handleTimeout = async () => {
-    setTimeUpDialogOpen(true)
-    setSubmitted(true)
-    setAutoSubmitting(true)
-
-    try {
-      const payload = buildPayload()
-      console.log('Auto-submitting with payload:', payload)
-
-      const { data, error } = await submitToDB(payload)
-
-      if (error) {
-        console.error('Auto-submission failed:', error)
-        setErrorPopup('Auto-submission failed. Please contact support.')
-        return
-      }
-
-      if (!data) {
-        console.error('Auto-submission failed - no data returned')
-        setErrorPopup('Auto-submission failed - please contact support.')
-        return
-      }
-
-      console.log('Auto-submission successful, redirecting to result:', data.id)
-      setTimeout(() => router.push(`/result/${data.id}`), 2000)
-    } catch (error) {
-      console.error('Unexpected auto-submission error:', error)
-      setErrorPopup('An error occurred during auto-submission')
-    } finally {
-      setAutoSubmitting(false)
-    }
-  }
-
-  // Group questions by section_id
-  const questionsBySection = useMemo(() => {
-    const map: { [sectionId: number]: Question[] } = {}
-    for (const q of questions) {
-      if (!map[q.section_id]) map[q.section_id] = []
-      map[q.section_id].push(q)
-    }
-    return map
-  }, [questions])
-
-  // Helper to get section name
-  const getSectionName = (sectionId: number) => {
+  if (loading) {
     return (
-      sections.find(s => s.id === sectionId)?.name || `Section ${sectionId}`
-    )
-  }
-
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`)
-      })
-      setFullscreen(true)
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen()
-        setFullscreen(false)
-      }
-    }
-  }
-
-  const calculateScore = () => {
-    const payload = buildPayload()
-    return {
-      score: payload.score,
-      total: questions.length,
-      percentage: Math.round((payload.obtainedMarks / payload.totalMarks) * 100),
-      passed: payload.obtainedMarks >= (quiz?.passing_score || Math.ceil(payload.totalMarks * 0.6))
-    }
-  }
-
-  if (loading || attemptsLoading) {
-    return (
-      <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
         <CircularProgress />
       </Box>
     )
   }
 
-  if (!quiz) {
-    return (
-      <Container sx={{ mt: 4 }}>
-        <Typography variant="h6" color="error">
-          Quiz not found.
-        </Typography>
-      </Container>
-    )
-  }
-
-  if (errorPopup) {
-    return <ErrorPopup message={errorPopup} onClose={() => setErrorPopup(null)} />
-  }
-
   return (
-    <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+    <Box sx={{
+      fontFamily: 'Poppins, sans-serif',
+      backgroundColor: currentTheme.background,
+      color: currentTheme.text,
+      minHeight: '100vh',
+      transition: 'background-color 0.3s, color 0.3s',
+      // Disable text selection for exam security
+      userSelect: 'none',
+      WebkitUserSelect: 'none',
+      MozUserSelect: 'none',
+      msUserSelect: 'none',
+    }}>
+      {/* Header */}
       <Box sx={{
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #f5f7fa 0%, #e9ecf3 100%)',
-        p: fullscreen ? 0 : 3,
-        transition: 'padding 0.3s ease',
+        backgroundColor: currentTheme.primary,
+        color: '#ffffff',
+        p: 2,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        boxShadow: 2
       }}>
-        <Container maxWidth="xl" sx={{
-          py: fullscreen ? 0 : 4,
-          height: fullscreen ? '100vh' : 'auto',
-          overflow: fullscreen ? 'auto' : 'visible',
-          borderRadius: 3,
-          boxShadow: 4,
-          bgcolor: 'background.paper',
+        <Typography variant="h5" fontWeight="bold">
+          {quiz?.quiz_title || 'Exam'}
+        </Typography>
+        
+        <Box display="flex" alignItems="center" gap={2}>
+          <Box sx={{
+            backgroundColor: timeLeft && timeLeft <= 60 ? '#f44336' : currentTheme.primary,
+            color: '#ffffff',
+            px: 2,
+            py: 1,
+            borderRadius: 2,
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            transition: 'background-color 0.3s'
+          }}>
+            <TimerIcon />
+            <span>{formatTime(timeLeft || 0)}</span>
+          </Box>
+          
+          <IconButton onClick={toggleFullscreen} color="inherit">
+            {fullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+          </IconButton>
+          
+          <Avatar src={user?.imageUrl} alt={user?.fullName || 'User'} />
+        </Box>
+      </Box>
+
+      {/* Main Content */}
+      <Box display="flex" sx={{ height: 'calc(100vh - 64px)' }}>
+        {/* Navigation Sidebar */}
+        <Drawer
+          variant="persistent"
+          open={showNavigationPanel}
+          sx={{
+            width: showNavigationPanel ? 320 : 0,
+            flexShrink: 0,
+            '& .MuiDrawer-paper': {
+              width: 320,
+              boxSizing: 'border-box',
+              backgroundColor: currentTheme.background,
+              borderRight: `1px solid ${currentTheme.secondary}`,
+              overflowY: 'auto'
+            },
+          }}
+        >
+          <Box sx={{ p: 2 }}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+              <Typography variant="h6" fontWeight="bold">
+                Question Navigation
+              </Typography>
+              <IconButton onClick={() => setShowNavigationPanel(false)} size="small">
+                <ChevronRightIcon />
+              </IconButton>
+            </Box>
+
+            <Box display="flex" gap={1} mb={3} flexWrap="wrap">
+              <Chip 
+                label={`Answered: ${answeredCount}`} 
+                size="small" 
+                sx={{ 
+                  backgroundColor: NAV_COLORS.attempted, 
+                  color: '#fff',
+                  fontWeight: 'bold'
+                }} 
+              />
+              <Chip 
+                label={`Unanswered: ${questions.length - answeredCount}`} 
+                size="small" 
+                sx={{ 
+                  backgroundColor: NAV_COLORS.unattempted,
+                  border: `1px solid ${NAV_COLORS.borderUnattempted}`,
+                  fontWeight: 'bold'
+                }} 
+              />
+              <Chip 
+                label={`Flagged: ${Object.values(flagged).filter(Boolean).length}`} 
+                size="small" 
+                sx={{ 
+                  backgroundColor: NAV_COLORS.flagged, 
+                  color: '#fff',
+                  fontWeight: 'bold'
+                }} 
+              />
+            </Box>
+
+            {/* Sections with expandable questions */}
+            <List sx={{ width: '100%' }}>
+              {sections.map((section) => {
+                const sectionQuestionsList = questionsBySection[section.id] || []
+                const sectionAnswered = sectionQuestionsList.filter((q: Question) => answers[q.id]).length
+                const sectionFlagged = sectionQuestionsList.filter((q: Question) => flagged[q.id]).length
+
+                return (
+                  <Box key={section.id} sx={{ mb: 1 }}>
+                    <ListItem 
+                      button 
+                      onClick={() => toggleSection(section.id)}
+                      sx={{
+                        backgroundColor: currentSection === section.id ? `${currentTheme.primary}20` : 'transparent',
+                        borderRadius: 1,
+                        '&:hover': {
+                          backgroundColor: `${currentTheme.primary}10`
+                        }
+                      }}
+                    >
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        {expandedSections[section.id] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary={
+                          <Box display="flex" justifyContent="space-between" alignItems="center">
+                            <Typography fontWeight="bold">
+                              {section.name}
+                            </Typography>
+                            <Box display="flex" gap={1}>
+                              <Chip 
+                                label={`${sectionAnswered}/${sectionQuestionsList.length}`}
+                                size="small"
+                                sx={{
+                                  backgroundColor: sectionAnswered === sectionQuestionsList.length 
+                                    ? NAV_COLORS.attempted 
+                                    : sectionAnswered > 0 
+                                      ? `${NAV_COLORS.attempted}80`
+                                      : NAV_COLORS.unattempted,
+                                  color: sectionAnswered === sectionQuestionsList.length || sectionAnswered > 0 
+                                    ? '#fff' 
+                                    : 'inherit',
+                                  fontSize: '0.7rem',
+                                  height: 20
+                                }}
+                              />
+                              {sectionFlagged > 0 && (
+                                <Chip 
+                                  label={sectionFlagged}
+                                  size="small"
+                                  sx={{
+                                    backgroundColor: NAV_COLORS.flagged,
+                                    color: '#fff',
+                                    fontSize: '0.7rem',
+                                    height: 20
+                                  }}
+                                />
+                              )}
+                            </Box>
+                          </Box>
+                        }
+                        secondary={`${sectionQuestionsList.length} Questions | ${section.marks || '?'} Marks`}
+                      />
+                    </ListItem>
+
+                    <Collapse in={expandedSections[section.id]} timeout="auto" unmountOnExit>
+                      <Box sx={{ 
+                        pl: 6, 
+                        pr: 2, 
+                        pt: 1,
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 0.5
+                      }}>
+                        {sectionQuestionsList.map((q: Question, idx: number) => (
+                          <QuestionButton
+                            key={q.id}
+                            q={q}
+                            idx={idx}
+                            isCurrent={currentQuestionId === q.id}
+                            isAnswered={!!answers[q.id]}
+                            isFlagged={!!flagged[q.id]}
+                            isBookmarked={!!bookmarked[q.id]}
+                            isMarkedForReview={!!markedForReview[q.id]}
+                            onClick={() => goToQuestion(q.id)}
+                            disabled={submitted}
+                          />
+                        ))}
+                      </Box>
+                    </Collapse>
+                  </Box>
+                )
+              })}
+            </List>
+
+            <Button
+              variant="contained"
+              color="primary"
+              fullWidth
+              sx={{ mt: 2, fontWeight: 'bold' }}
+              onClick={handleSubmit}
+              disabled={submitted}
+              startIcon={<CheckCircleIcon />}
+            >
+              Submit Exam
+            </Button>
+
+            <Box sx={{ mt: 3 }}>
+              <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                Navigation Legend:
+              </Typography>
+              <Box display="flex" flexDirection="column" gap={1}>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '4px',
+                    backgroundColor: NAV_COLORS.attempted,
+                    border: `1px solid ${NAV_COLORS.borderAttempted}`
+                  }} />
+                  <Typography variant="body2">Answered</Typography>
+                </Box>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '4px',
+                    backgroundColor: NAV_COLORS.unattempted,
+                    border: `1px solid ${NAV_COLORS.borderUnattempted}`
+                  }} />
+                  <Typography variant="body2">Unanswered</Typography>
+                </Box>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '4px',
+                    backgroundColor: NAV_COLORS.current,
+                    border: `1px solid ${NAV_COLORS.borderCurrent}`
+                  }} />
+                  <Typography variant="body2">Current</Typography>
+                </Box>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '4px',
+                    backgroundColor: NAV_COLORS.flagged,
+                    border: `1px solid ${NAV_COLORS.borderUnattempted}`,
+                    position: 'relative'
+                  }}>
+                    <FlagIcon sx={{
+                      position: 'absolute',
+                      top: -6,
+                      right: -6,
+                      color: '#f44336',
+                      fontSize: '0.75rem'
+                    }} />
+                  </Box>
+                  <Typography variant="body2">Flagged</Typography>
+                </Box>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: '4px',
+                    backgroundColor: NAV_COLORS.markedForReview,
+                    border: `1px solid ${NAV_COLORS.borderMarkedForReview}`
+                  }} />
+                  <Typography variant="body2">Marked for Review</Typography>
+                </Box>
+              </Box>
+            </Box>
+          </Box>
+        </Drawer>
+
+        {/* Question Area */}
+        <Box sx={{
+          flexGrow: 1,
+          overflowY: 'auto',
+          p: 3,
+          ...fontSizeStyles[fontSize]
         }}>
-          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={3} sx={{ height: '100%' }}>
-            {/* Left Navigator */}
-            <Paper
-              elevation={fullscreen ? 0 : 2}
+          {/* Current Section Header */}
+          {sections.filter((s) => s.id === currentSection).map((section) => (
+            <Card key={section.id} sx={{ 
+              mb: 3,
+              backgroundColor: currentTheme.primary,
+              color: '#fff',
+            }}>
+              <CardContent>
+                <Typography variant="h5" gutterBottom>
+                  {section.name}
+                </Typography>
+                {section.description && (
+                  <Typography variant="body1" sx={{ mb: 1 }}>
+                    {section.description}
+                  </Typography>
+                )}
+                {section.instructions && showSectionInstructions && (
+                  <Box sx={{ 
+                    mt: 2,
+                    p: 2,
+                    backgroundColor: '#ffffff20',
+                    borderRadius: 1
+                  }}>
+                    <Typography variant="subtitle1" fontWeight="bold">
+                      Section Instructions:
+                    </Typography>
+                    <Typography variant="body2">
+                      {section.instructions}
+                    </Typography>
+                  </Box>
+                )}
+                <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+                  <Chip 
+                    label={`${questionsBySection[section.id]?.length || 0} Questions`}
+                    sx={{ backgroundColor: '#ffffff30', color: '#fff' }}
+                  />
+                  <Chip 
+                    label={`${section.marks || '?'} Marks`}
+                    sx={{ backgroundColor: '#ffffff30', color: '#fff' }}
+                  />
+                  <Chip 
+                    label={`${Math.floor((section.marks || 0) / (quiz?.duration || 1))} Min/Question`}
+                    sx={{ backgroundColor: '#ffffff30', color: '#fff' }}
+                  />
+                </Box>
+              </CardContent>
+            </Card>
+          ))}
+
+          {/* Render only the current question, not all questions in the current section */}
+          {currentQuestion && (
+            <Box
+              key={currentQuestion.id}
+              ref={(el: HTMLDivElement | null) => { questionRefs.current[currentQuestion.id] = el; }}
+              id={`question-${currentQuestion.id}`}
               sx={{
-                p: 2,
-                borderRadius: fullscreen ? 0 : 3,
-                bgcolor: 'background.paper',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 2,
-                width: fullscreen ? 280 : 320,
-                height: fullscreen ? '100vh' : 'auto',
-                boxShadow: fullscreen ? 'none' : 2,
-                border: '1px solid #d1d5db',
-                overflowY: 'auto',
-                position: fullscreen ? 'fixed' : 'static',
-                left: 0,
-                top: 0,
-                zIndex: fullscreen ? 1200 : 'auto',
+                mb: 4,
+                p: 3,
+                borderRadius: 2,
+                backgroundColor: currentTheme.background,
+                border: `2px solid ${currentTheme.primary}`,
+                boxShadow: 3,
+                transition: 'all 0.3s',
+                position: 'relative'
               }}
             >
-              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                <Typography variant="subtitle1" fontWeight={700} color="text.secondary">
-                  Quiz Navigation
-                </Typography>
+              {/* Question number with section prefix */}
+              <Typography variant="subtitle2" sx={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                backgroundColor: currentTheme.primary,
+                color: '#fff',
+                px: 1,
+                borderRadius: 1,
+                fontWeight: 'bold'
+              }}>
+                Q-{questions.findIndex(q => q.id === currentQuestion.id) + 1}
+              </Typography>
+
+              {/* Question controls */}
+              <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={2}>
                 <Box>
-                  <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
-                    <IconButton onClick={toggleFullscreen} size="small">
-                      {fullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Help">
-                    <IconButton onClick={() => setShowHelp(!showHelp)} size="small">
-                      <HelpOutlineIcon />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              </Box>
-
-              {showHelp && (
-                <Paper elevation={2} sx={{ p: 2, mb: 2, bgcolor: '#f8f9fa', border: '1px solid #e0e0e0' }}>
-                  <Typography variant="body2" sx={{ mb: 1, fontWeight: 700, color: '#222' }}>
-                    Navigation Guide
+                  <Typography variant="h6" fontWeight="bold" sx={{ pr: 4 }}>
+                    {currentQuestion.question_text}
                   </Typography>
-                  <Stack spacing={1}>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.attempted, color: '#fff', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, border: `1.5px solid ${NAV_COLORS.borderAttempted}` }}>1</Box>
-                      <Typography variant="caption" color="#222">Attempted</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.unattempted, color: '#222', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, border: `1.5px solid ${NAV_COLORS.borderUnattempted}` }}>2</Box>
-                      <Typography variant="caption" color="#222">Unattempted</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.current, color: '#222', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, border: `2px solid ${NAV_COLORS.borderCurrent}` }}>3</Box>
-                      <Typography variant="caption" color="#222">Current</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.unattempted, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1.5px solid #d32f2f' }}>
-                        <FlagIcon sx={{ color: '#d32f2f', fontSize: 18 }} />
-                      </Box>
-                      <Typography variant="caption" color="#222">Flagged</Typography>
-                    </Box>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Box sx={{ width: 28, height: 28, bgcolor: NAV_COLORS.bookmarked, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1.5px solid ${NAV_COLORS.borderBookmarked}` }}>
-                        <BookmarkIcon sx={{ color: '#e6b800', fontSize: 18 }} />
-                      </Box>
-                      <Typography variant="caption" color="#222">Bookmarked</Typography>
-                    </Box>
-                  </Stack>
-                </Paper>
-              )}
-
-              {/* Section navigation */}
-              {Object.entries(questionsBySection).map(([sectionId, qs], sidx) => (
-                <Box key={sectionId} mb={2}>
-                  <Typography variant="caption" fontWeight={700} color="text.secondary" mb={1} display="block" sx={{ letterSpacing: 1, textTransform: 'uppercase' }}>
-                    {getSectionName(Number(sectionId))}
-                  </Typography>
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                    {qs.map((q, idx) => {
-                      const globalIdx = questions.findIndex(qq => qq.id === q.id)
-                      return (
-                        <QuestionButton
-                          key={q.id}
-                          idx={globalIdx}
-                          current={current}
-                          answers={answers}
-                          flagged={flagged}
-                          questions={questions}
-                          setCurrent={setCurrent}
-                          submitted={submitted}
-                          toggleFlag={toggleFlag}
-                          bookmarked={bookmarked}
-                        />
-                      )
-                    })}
-                  </Box>
-                </Box>
-              ))}
-
-              <Box mt="auto">
-                <Box display="flex" justifyContent="space-between" mb={1}>
-                  <Typography variant="body2" color="text.secondary">
-                    Answered: {answeredCount}/{questions.length}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Flagged: {Object.values(flagged).filter(Boolean).length}
-                  </Typography>
-                </Box>
-
-                <Button
-                  fullWidth
-                  variant="contained"
-                  color="inherit"
-                  onClick={handleSubmitClick}
-                  disabled={submitted || timeLeft === 0}
-                  sx={{ 
-                    textTransform: 'none', 
-                    fontSize: '0.95rem', 
-                    py: 1.5, 
-                    fontWeight: 600,
-                    borderRadius: '8px',
-                  }}
-                  startIcon={<CheckCircleIcon />}
-                >
-                  Submit Quiz
-                </Button>
-              </Box>
-            </Paper>
-
-            {/* Right Main Quiz */}
-            <Box flex={1} sx={{ 
-              pl: fullscreen ? '300px' : 0,
-              transition: 'padding 0.3s ease',
-            }}>
-              <Stack spacing={3} sx={{ height: '100%' }}>
-                {/* Header */}
-                <Paper elevation={3} sx={{ p: 3, borderRadius: 3, mb: 3, boxShadow: 4, border: '1px solid #d1d5db', bgcolor: 'white' }}>
-                  <Box display="flex" justifyContent="space-between" alignItems="center">
-                    <Typography variant="h5" fontWeight={800} color="text.primary">
-                      {quiz.quiz_title ?? quiz.quiz_name ?? 'Untitled Quiz'}
-                    </Typography>
-                    <Chip
-                      icon={<TimerIcon />}
-                      label={formatTime(timeLeft ?? 0)}
-                      variant="filled"
-                      sx={{ fontWeight: 700, fontSize: '1.1rem', px: 2, py: 1, borderRadius: 2, bgcolor: '#444', color: '#fff' }}
+                  {currentQuestion.difficulty && (
+                    <Chip 
+                      label={currentQuestion.difficulty} 
+                      size="small" 
+                      sx={{ 
+                        mt: 1,
+                        backgroundColor: DIFFICULTY_COLORS[currentQuestion.difficulty],
+                        color: '#fff',
+                        fontWeight: 'bold'
+                      }} 
                     />
-                  </Box>
-                  <Divider sx={{ my: 2 }} />
-                </Paper>
-
-                {/* Question Navigation */}
-                <Box display="flex" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" fontWeight={500}>
-                    Question {current + 1} of {questions.length}
-                  </Typography>
-                  <Box display="flex" gap={1}>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => setCurrent(Math.max(0, current - 1))}
-                      disabled={current === 0 || submitted}
-                      startIcon={<BackIcon />}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => setCurrent(Math.min(questions.length - 1, current + 1))}
-                      disabled={current === questions.length - 1 || submitted}
-                      endIcon={<NextIcon />}
-                    >
-                      Next
-                    </Button>
-                  </Box>
-                </Box>
-
-                {/* Section-wise Questions */}
-                {(() => {
-                  const currentQuestion = questions[current]
-                  const currentSectionId = currentQuestion?.section_id
-                  const sectionQuestions = questionsBySection[currentSectionId] || []
-                  const sectionName = getSectionName(currentSectionId)
-                  const sectionIndex = sectionQuestions.findIndex(q => q.id === currentQuestion.id)
-                  const questionMarks = currentQuestion?.marks || 1
-
-                  return (
-                    <Box>
-                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                        <Typography variant="h6" fontWeight={700} color="text.secondary">
-                          {sectionName}
-                        </Typography>
-                        <Box display="flex" gap={1}>
-                          <Tooltip title={flagged[currentQuestion.id] ? 'Unflag question' : 'Flag question'}>
-                            <IconButton
-                              size="small"
-                              onClick={() => toggleFlag(currentQuestion.id)}
-                              color={flagged[currentQuestion.id] ? 'error' : 'inherit'}
-                            >
-                              {flagged[currentQuestion.id] ? <FlagIcon /> : <FlagOutlinedIcon />}
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title={bookmarked[currentQuestion.id] ? 'Remove bookmark' : 'Bookmark question'}>
-                            <IconButton
-                              size="small"
-                              onClick={() => toggleBookmark(currentQuestion.id)}
-                              color={bookmarked[currentQuestion.id] ? 'warning' : 'inherit'}
-                            >
-                              {bookmarked[currentQuestion.id] ? <BookmarkIcon /> : <BookmarkBorderIcon />}
-                            </IconButton>
-                          </Tooltip>
-                          {questionMarks > 0 && (
-                            <Chip
-                              label={`${questionMarks} mark${questionMarks > 1 ? 's' : ''}`}
-                              size="small"
-                              color="info"
-                              variant="outlined"
-                            />
-                          )}
-                        </Box>
-                      </Box>
-
-                      <Card sx={{
-                        borderRadius: 3,
-                        boxShadow: 3,
-                        background: 'white',
-                        borderLeft: '4px solid',
-                        borderColor: flagged[currentQuestion.id] ? 'error.main' : 'text.primary',
-                        mb: 2,
-                      }}>
-                        <CardContent>
-                          <Typography variant="subtitle1" fontWeight={700} mb={2} color="text.primary">
-                            Q{sectionIndex + 1}. {currentQuestion.question_text}
-                          </Typography>
-                          {currentQuestion.question_type === 'single' ? (
-                            <RadioGroup
-                              value={answers[currentQuestion.id]?.[0] || ''}
-                              onChange={e => handleCheckboxChange(currentQuestion.id, e.target.value)}
-                            >
-                              {currentQuestion.options.map((opt, i) => (
-                                <FormControlLabel
-                                  key={i}
-                                  value={opt.text}
-                                  control={<Radio disabled={submitted} />}
-                                  label={
-                                    <Box sx={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      textDecoration: submitted && opt.isCorrect ? 'underline' : 'none',
-                                      color: submitted && opt.isCorrect ? 'success.main' : 'text.primary',
-                                    }}>
-                                      {opt.text}
-                                      {submitted && opt.isCorrect && (
-                                        <CheckCircleIcon color="success" fontSize="small" sx={{ ml: 1 }} />
-                                      )}
-                                    </Box>
-                                  }
-                                  sx={{
-                                    alignItems: 'flex-start',
-                                    mb: 1,
-                                    bgcolor:
-                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
-                                        ? 'error.light'
-                                        : 'transparent',
-                                    borderRadius: 1,
-                                    p:
-                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
-                                        ? 1
-                                        : 0,
-                                  }}
-                                />
-                              ))}
-                            </RadioGroup>
-                          ) : (
-                            <FormGroup>
-                              {currentQuestion.options.map((opt, i) => (
-                                <FormControlLabel
-                                  key={i}
-                                  control={
-                                    <Checkbox
-                                      checked={answers[currentQuestion.id]?.includes(opt.text) || false}
-                                      onChange={() => handleCheckboxChange(currentQuestion.id, opt.text)}
-                                      disabled={submitted}
-                                    />
-                                  }
-                                  label={
-                                    <Box sx={{
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      textDecoration: submitted && opt.isCorrect ? 'underline' : 'none',
-                                      color: submitted && opt.isCorrect ? 'success.main' : 'text.primary',
-                                    }}>
-                                      {opt.text}
-                                      {submitted && opt.isCorrect && (
-                                        <CheckCircleIcon color="success" fontSize="small" sx={{ ml: 1 }} />
-                                      )}
-                                    </Box>
-                                  }
-                                  sx={{
-                                    alignItems: 'flex-start',
-                                    mb: 1,
-                                    bgcolor:
-                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
-                                        ? 'error.light'
-                                        : 'transparent',
-                                    borderRadius: 1,
-                                    p:
-                                      submitted && answers[currentQuestion.id]?.includes(opt.text) && !opt.isCorrect
-                                        ? 1
-                                        : 0,
-                                  }}
-                                />
-                              ))}
-                            </FormGroup>
-                          )}
-                        </CardContent>
-                      </Card>
-                    </Box>
-                  )
-                })()}
-
-                {/* Bottom Navigation */}
-                <Box display="flex" justifyContent="space-between" mt="auto">
-                  <Button
-                    variant="outlined"
-                    onClick={() => setCurrent(Math.max(0, current - 1))}
-                    disabled={current === 0 || submitted}
-                    startIcon={<BackIcon />}
-                    sx={{ borderRadius: '8px' }}
-                  >
-                    Previous Question
-                  </Button>
-                  {current < questions.length - 1 ? (
-                    <Button
-                      variant="contained"
-                      onClick={() => setCurrent(Math.min(questions.length - 1, current + 1))}
-                      disabled={submitted}
-                      endIcon={<NextIcon />}
-                      sx={{ borderRadius: '8px' }}
-                    >
-                      Next Question
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="contained"
-                      color="inherit"
-                      onClick={handleSubmitClick}
-                      disabled={submitted || timeLeft === 0}
-                      endIcon={<CheckCircleIcon />}
-                      sx={{ borderRadius: '8px' }}
-                    >
-                      {submitted ? 'Submitted' : 'Submit Quiz'}
-                    </Button>
                   )}
                 </Box>
-              </Stack>
+                
+                <Box display="flex" gap={1}>
+                  <Tooltip title="Flag question">
+                    <IconButton 
+                      onClick={() => toggleFlag(currentQuestion.id)} 
+                      size="small"
+                      sx={{
+                        backgroundColor: flagged[currentQuestion.id] ? `${NAV_COLORS.flagged}20` : 'transparent',
+                        '&:hover': {
+                          backgroundColor: `${NAV_COLORS.flagged}10`
+                        }
+                      }}
+                    >
+                      <FlagIcon color={flagged[currentQuestion.id] ? 'error' : 'inherit'} />
+                    </IconButton>
+                  </Tooltip>
+                  
+                  <Tooltip title="Bookmark">
+                    <IconButton 
+                      onClick={() => toggleBookmark(currentQuestion.id)} 
+                      size="small"
+                      sx={{
+                        backgroundColor: bookmarked[currentQuestion.id] ? `${NAV_COLORS.bookmarked}20` : 'transparent',
+                        '&:hover': {
+                          backgroundColor: `${NAV_COLORS.bookmarked}10`
+                        }
+                      }}
+                    >
+                      {bookmarked[currentQuestion.id] ? (
+                        <BookmarkIcon color="warning" />
+                      ) : (
+                        <BookmarkBorderIcon />
+                      )}
+                    </IconButton>
+                  </Tooltip>
+                  
+                  <Tooltip title="Mark for review">
+                    <IconButton 
+                      onClick={() => toggleMarkForReview(currentQuestion.id)} 
+                      size="small"
+                      sx={{
+                        backgroundColor: markedForReview[currentQuestion.id] ? `${NAV_COLORS.markedForReview}20` : 'transparent',
+                        '&:hover': {
+                          backgroundColor: `${NAV_COLORS.markedForReview}10`
+                        }
+                      }}
+                    >
+                      <VisibilityIcon color={markedForReview[currentQuestion.id] ? 'secondary' : 'inherit'} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              </Box>
+              
+              {/* Question options */}
+              {currentQuestion.question_type === 'single' ? (
+                <RadioGroup
+                  value={answers[currentQuestion.id]?.[0] || ''}
+                  onChange={(e) => handleOptionSelect(currentQuestion.id, e.target.value, currentQuestion.question_type)}
+                >
+                  {currentQuestion.options.map((opt: Option, optIdx: number) => (
+                    <FormControlLabel
+                      key={optIdx}
+                      value={opt.text}
+                      control={<Radio color="primary" />}
+                      label={opt.text}
+                      sx={{
+                        mb: 1,
+                        p: 1,
+                        borderRadius: 1,
+                        backgroundColor: answers[currentQuestion.id]?.includes(opt.text) 
+                          ? `${currentTheme.primary}20` 
+                          : 'transparent',
+                        '&:hover': {
+                          backgroundColor: `${currentTheme.primary}10`
+                        }
+                      }}
+                      disabled={submitted}
+                    />
+                  ))}
+                </RadioGroup>
+              ) : (
+                <FormGroup>
+                  {currentQuestion.options.map((opt: Option, optIdx: number) => (
+                    <FormControlLabel
+                      key={optIdx}
+                      control={
+                        <Checkbox
+                          checked={answers[currentQuestion.id]?.includes(opt.text) || false}
+                          onChange={() => handleOptionSelect(currentQuestion.id, opt.text, currentQuestion.question_type)}
+                          color="primary"
+                        />
+                      }
+                      label={opt.text}
+                      sx={{
+                        mb: 1,
+                        p: 1,
+                        borderRadius: 1,
+                        backgroundColor: answers[currentQuestion.id]?.includes(opt.text) 
+                          ? `${currentTheme.primary}20` 
+                          : 'transparent',
+                        '&:hover': {
+                          backgroundColor: `${currentTheme.primary}10`
+                        }
+                      }}
+                      disabled={submitted}
+                    />
+                  ))}
+                </FormGroup>
+              )}
+              
+              {/* Marks indicator */}
+              <Typography variant="caption" sx={{
+                display: 'block',
+                mt: 2,
+                textAlign: 'right',
+                fontStyle: 'italic',
+                fontWeight: 'bold'
+              }}>
+                Marks: {currentQuestion.marks || 1}
+              </Typography>
+
+              {/* Explanation (visible in review mode or if showAnswerKey is true) */}
+              {(reviewMode || showAnswerKey) && currentQuestion.explanation && (
+                <Box sx={{ 
+                  mt: 3, 
+                  p: 2, 
+                  backgroundColor: '#e8f5e9', 
+                  borderRadius: 1,
+                  borderLeft: '4px solid #4caf50'
+                }}>
+                  <Typography variant="subtitle2" fontWeight="bold" color="#2e7d32">
+                    Explanation:
+                  </Typography>
+                  <Typography variant="body2" color="#2e7d32">
+                    {currentQuestion.explanation}
+                  </Typography>
+                </Box>
+              )}
             </Box>
-          </Stack>
-        </Container>
+          )}
 
-        {/* Dialogs */}
-        <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
-          <DialogTitle>Submit Quiz</DialogTitle>
-          <DialogContent>
-            <Divider sx={{ mb: 2 }} />
-            <DialogContentText>
-              You answered {answeredCount} out of {questions.length} questions.
-            </DialogContentText>
-            {answeredCount < questions.length && (
-              <DialogContentText color="error" sx={{ mt: 1 }}>
-                You have {questions.length - answeredCount} unanswered questions.
-              </DialogContentText>
-            )}
-            {/* Show flagged and bookmarked questions */}
-            {Object.values(flagged).filter(Boolean).length > 0 && (
-              <Box mt={2}>
-                <Typography variant="subtitle2" color="warning.main" fontWeight={600} mb={0.5}>Flagged Questions:</Typography>
-                <Stack direction="row" flexWrap="wrap" gap={1} mb={1}>
-                  {questions
-                    .map((q, idx) => ({ ...q, idx }))
-                    .filter(q => flagged[q.id])
-                    .map(q => (
-                      <Chip
-                        key={q.id}
-                        label={`Q${q.idx + 1} (${getSectionName(q.section_id)})`}
-                        color="warning"
-                        variant="outlined"
-                      />
-                    ))}
-                </Stack>
-              </Box>
-            )}
-            {Object.values(bookmarked).filter(Boolean).length > 0 && (
-              <Box mt={2}>
-                <Typography variant="subtitle2" color="info.main" fontWeight={600} mb={0.5}>Bookmarked Questions:</Typography>
-                <Stack direction="row" flexWrap="wrap" gap={1} mb={1}>
-                  {questions
-                    .map((q, idx) => ({ ...q, idx }))
-                    .filter(q => bookmarked[q.id])
-                    .map(q => (
-                      <Chip
-                        key={q.id}
-                        label={`Q${q.idx + 1} (${getSectionName(q.section_id)})`}
-                        color="info"
-                        variant="outlined"
-                      />
-                    ))}
-                </Stack>
-              </Box>
-            )}
-            {/* Optionally show pass/fail status only */}
-            {quiz.passing_score && (
-              <Box mt={2}>
-                <Typography variant="body2" color={calculateScore().passed ? 'success.main' : 'error.main'}>
-                  {calculateScore().passed ? 'Likely to pass' : 'Not passing yet'}
-                </Typography>
-              </Box>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setConfirmDialogOpen(false)} color="secondary">
-              Continue Quiz
+          {/* Section navigation buttons */}
+          <Box display="flex" justifyContent="space-between" mt={4}>
+            <Button
+              variant="contained"
+              startIcon={<BackIcon />}
+              onClick={goToPrevQuestionFlat}
+              disabled={questions.findIndex(q => q.id === currentQuestionId) === 0}
+              sx={{ fontWeight: 'bold' }}
+            >
+              Previous Question
             </Button>
-            <Button onClick={confirmSubmission} variant="contained" autoFocus>
-              Confirm Submit
+            <Button
+              variant="contained"
+              endIcon={<NextIcon />}
+              onClick={goToNextQuestionFlat}
+              disabled={questions.findIndex(q => q.id === currentQuestionId) === questions.length - 1}
+              sx={{ fontWeight: 'bold' }}
+            >
+              Next Question
             </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog open={timeUpDialogOpen} fullWidth maxWidth="sm">
-          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <TimerIcon color="error" />
-            ⏰ Time's Up
-          </DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              The quiz time has ended. Your answers are being auto-submitted.
-            </DialogContentText>
-            {autoSubmitting && (
-              <Box mt={3} display="flex" flexDirection="column" alignItems="center">
-                <CircularProgress size={48} thickness={4} sx={{ mb: 2 }} />
-                <Typography variant="body2" color="text.secondary">
-                  Please wait while we process your submission...
-                </Typography>
-              </Box>
-            )}
-          </DialogContent>
-        </Dialog>
+          </Box>
+        </Box>
       </Box>
-    </motion.div>
+
+      {/* Floating Action Buttons */}
+      {!showNavigationPanel && (
+        <Fab
+          color="primary"
+          sx={{
+            position: 'fixed',
+            bottom: 16,
+            left: 16,
+            zIndex: 1000
+          }}
+          onClick={() => setShowNavigationPanel(true)}
+        >
+          <VisibilityIcon />
+        </Fab>
+      )}
+      
+      <Fab
+        color="secondary"
+        sx={{
+          position: 'fixed',
+          bottom: 16,
+          right: 16,
+          zIndex: 1000
+        }}
+        onClick={() => setSidebarOpen(true)}
+      >
+        <SettingsIcon />
+      </Fab>
+
+      {/* Settings Panel */}
+      <Drawer
+        anchor="right"
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      >
+        <Box sx={{ width: 300, p: 3 }}>
+          <Typography variant="h6" gutterBottom>
+            Exam Settings
+          </Typography>
+          
+          <Divider sx={{ my: 2 }} />
+          
+          <Typography variant="subtitle1" gutterBottom>
+            Theme
+          </Typography>
+          <RadioGroup
+            value={theme}
+            onChange={(e) => setTheme(e.target.value as any)}
+          >
+            <FormControlLabel 
+              value="default" 
+              control={<Radio />} 
+              label={
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    backgroundColor: THEMES.default.primary
+                  }} />
+                  <span>Default</span>
+                </Box>
+              } 
+            />
+            <FormControlLabel 
+              value="dark" 
+              control={<Radio />} 
+              label={
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    backgroundColor: THEMES.dark.primary
+                  }} />
+                  <span>Dark</span>
+                </Box>
+              } 
+            />
+            <FormControlLabel 
+              value="sepia" 
+              control={<Radio />} 
+              label={
+                <Box display="flex" alignItems="center" gap={1}>
+                  <Box sx={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    backgroundColor: THEMES.sepia.primary
+                  }} />
+                  <span>Sepia</span>
+                </Box>
+              } 
+            />
+          </RadioGroup>
+          
+          <Divider sx={{ my: 2 }} />
+          
+          <Typography variant="subtitle1" gutterBottom>
+            Font Size
+          </Typography>
+          <RadioGroup
+            value={fontSize}
+            onChange={(e) => setFontSize(e.target.value as any)}
+          >
+            <FormControlLabel value="normal" control={<Radio />} label="Normal" />
+            <FormControlLabel value="large" control={<Radio />} label="Large (+20%)" />
+            <FormControlLabel value="xlarge" control={<Radio />} label="Extra Large (+40%)" />
+          </RadioGroup>
+          
+          <Divider sx={{ my: 2 }} />
+          
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={showSectionInstructions}
+                onChange={(e) => setShowSectionInstructions(e.target.checked)}
+              />
+            }
+            label="Show Section Instructions"
+          />
+          
+          {quiz?.show_answers && (
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={showAnswerKey}
+                  onChange={(e) => setShowAnswerKey(e.target.checked)}
+                />
+              }
+              label="Show Answer Key"
+            />
+          )}
+        </Box>
+      </Drawer>
+
+      {/* Confirmation Dialog */}
+      <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
+        <DialogTitle>Submit Exam?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to submit your exam? You won't be able to make changes after submission.
+          </DialogContentText>
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2">Summary:</Typography>
+            <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
+              <Chip label={`Answered: ${answeredCount}`} color="success" variant="outlined" />
+              <Chip label={`Unanswered: ${questions.length - answeredCount}`} color="warning" variant="outlined" />
+              <Chip label={`Flagged: ${Object.values(flagged).filter(Boolean).length}`} color="error" variant="outlined" />
+            </Box>
+          </Box>
+          {redirectMessage && (
+            <Alert severity="success" sx={{ mt: 3 }}>{redirectMessage}</Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDialogOpen(false)}>Cancel</Button>
+          <Button 
+            onClick={confirmSubmit} 
+            variant="contained" 
+            color="primary"
+            autoFocus
+          >
+            Submit
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Time Up Dialog */}
+      <Dialog open={timeUpDialogOpen} onClose={() => {}}>
+        <DialogTitle>Time's Up!</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Your time for this exam has ended. Your answers are being submitted automatically.
+          </DialogContentText>
+          {autoSubmitting && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+              <CircularProgress />
+            </Box>
+          )}
+          {redirectMessage && (
+            <Alert severity="info" sx={{ mt: 3 }}>{redirectMessage}</Alert>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Submission Modal */}
+      <Dialog open={submittingModalOpen} PaperProps={{ sx: { textAlign: 'center', p: 4 } }}>
+        <DialogContent>
+          <CircularProgress sx={{ mb: 2 }} />
+          <Typography variant="h6" sx={{ mt: 2 }}>
+            Submitting your quiz, please wait...
+          </Typography>
+        </DialogContent>
+      </Dialog>
+
+      {/* Error Popup */}
+      {errorPopup && (
+        <ErrorPopup 
+          message={errorPopup} 
+          onClose={() => setErrorPopup(null)} 
+        />
+      )}
+
+      {/* Resume Notification */}
+      <Snackbar
+        open={resumeNotification}
+        onClose={() => setResumeNotification(false)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert
+          severity="info"
+          onClose={() => setResumeNotification(false)}
+          sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+          action={
+            <Button color="inherit" size="small" onClick={() => setResumeNotification(false)}>
+              Resume Quiz
+            </Button>
+          }
+        >
+          Your previous progress has been restored. You can continue your quiz from where you left off.
+        </Alert>
+      </Snackbar>
+    </Box>
   )
 }

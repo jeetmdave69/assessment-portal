@@ -50,7 +50,7 @@ export default function ResultPage() {
       setLoading(true);
       const { data: attemptData } = await supabase
         .from('attempts')
-        .select('id,quiz_id,user_name,score,correct_answers,answers,sections')
+        .select('id,quiz_id,user_name,score,correct_answers,answers,sections,marked_for_review')
         .eq('id', attemptId)
         .single();
       if (!attemptData) {
@@ -211,6 +211,11 @@ export default function ResultPage() {
                 </Typography>
                 <Typography variant="body1" color="text.secondary">
                   Quiz: <strong>{quizTitle}</strong>
+                </Typography>
+                <Typography variant="body1" color="warning.main">
+                  Marked for Review: {attempt?.marked_for_review && Object.keys(attempt.marked_for_review).filter(qid => attempt.marked_for_review[qid]).length > 0
+                    ? Object.keys(attempt.marked_for_review).filter(qid => attempt.marked_for_review[qid]).map(qid => `Q${Number(qid) + 1}`).join(', ')
+                    : 'None'}
                 </Typography>
               </Stack>
             </Stack>

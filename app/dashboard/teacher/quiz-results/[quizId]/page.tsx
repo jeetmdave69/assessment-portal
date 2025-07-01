@@ -28,6 +28,7 @@ interface Attempt {
   user_name: string;
   score: number;
   submitted_at: string;
+  marked_for_review?: Record<string, boolean>;
 }
 
 export default function QuizResultsPage() {
@@ -55,7 +56,8 @@ export default function QuizResultsPage() {
           user_id,
           user_name,
           score,
-          submitted_at
+          submitted_at,
+          marked_for_review
         `)
         .eq('quiz_id', Number(quizId))
         .order('submitted_at', { ascending: false });
@@ -146,6 +148,14 @@ export default function QuizResultsPage() {
                   <Typography variant="body2" color="text.secondary">
                     Submitted: {new Date(attempt.submitted_at).toLocaleString()}
                   </Typography>
+                  {attempt.marked_for_review && Object.keys(attempt.marked_for_review).length > 0 && (
+                    <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+                      Marked for Review: {Object.keys(attempt.marked_for_review)
+                        .filter(qid => attempt.marked_for_review && attempt.marked_for_review[qid])
+                        .map((qid, idx) => `Q${Number(qid) + 1}`)
+                        .join(', ')}
+                    </Typography>
+                  )}
                 </CardContent>
                 <CardActions>
                   <Button

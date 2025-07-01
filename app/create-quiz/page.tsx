@@ -33,14 +33,14 @@ import {
   LinearProgress,
   FormGroup,
 } from '@mui/material';
-import { useForm, FormProvider, useFieldArray, useWatch } from 'react-hook-form';
+import { useForm, FormProvider, useFieldArray, useWatch, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useUser } from '@clerk/nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { quizSchema, QuizFormValues, QuizSectionEnum, getSectionName, QuizSection } from '@/schemas/quizSchema';
+import { quizSchema, QuizFormValues } from '@/schemas/quizSchema';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -71,7 +71,7 @@ interface QuizQuestion {
   explanation?: string;
   marks: string;
   options: QuizOption[];
-  section_id: number;
+  section: string;
 }
 
 interface QuizResponse {
@@ -83,33 +83,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
-
-// Enhanced section labels with descriptions
-const SECTION_LABELS = {
-  qa: {
-    title: 'Quantitative Aptitude (QA)',
-    description: 'Mathematics, algebra, geometry, arithmetic problems'
-  },
-  lr: {
-    title: 'Logical Reasoning (LR)',
-    description: 'Puzzles, sequences, pattern recognition, logical problems'
-  },
-  va: {
-    title: 'Verbal Ability (VA)',
-    description: 'Grammar, vocabulary, sentence correction, word meanings'
-  },
-  di: {
-    title: 'Data Interpretation (DI)',
-    description: 'Charts, graphs, tables analysis and data-based questions'
-  },
-  gk: {
-    title: 'General Knowledge (GK)',
-    description: 'Current affairs, static GK, and general awareness'
-  }
-};
-
-const SECTION_CODE_TO_ID = { qa: 1, lr: 2, va: 3, di: 4, gk: 5 };
-const SECTION_ID_TO_CODE = { 1: 'qa', 2: 'lr', 3: 'va', 4: 'di', 5: 'gk' };
 
 async function uploadImageToSupabase(file: File, pathPrefix: string): Promise<string> {
   const fileName = `${pathPrefix}/${uuidv4()}-${file.name}`;
@@ -173,7 +146,10 @@ export default function CreateQuizPage() {
   const autoSaveTimer = useRef<NodeJS.Timeout | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null });
   const [expandedIndex, setExpandedIndex] = useState(0);
-  const [sectionsEnabled, setSectionsEnabled] = useState(['qa', 'lr', 'va', 'di', 'gk']);
+  const [sections, setSections] = useState<string[]>(["Section 1"]);
+  const [newSection, setNewSection] = useState("");
+  const [addSectionDialog, setAddSectionDialog] = useState<{ open: boolean; qIndex: number | null }>({ open: false, qIndex: null });
+  const [inlineNewSection, setInlineNewSection] = useState("");
 
   const router = useRouter();
 
@@ -203,7 +179,7 @@ export default function CreateQuizPage() {
             { text: '', image: null, isCorrect: false },
             { text: '', image: null, isCorrect: false },
           ],
-          section_id: SECTION_CODE_TO_ID['qa'],
+          section: sections[0] || "Section 1",
         },
       ],
     },
@@ -270,21 +246,23 @@ export default function CreateQuizPage() {
       complete: (result) => {
         try {
           const parsedQuestions: QuizQuestion[] = result.data.map((row: any) => {
-            const correctAnswers = (row.correct_answers || '').split(';').map((s: string) => s.trim());
+            const correctAnswers = (row.correct_answers || '').split(';').map((s: string) => s.trim()).filter(Boolean);
             const questionType = correctAnswers.length > 1 ? 'multiple' : 'single';
-
             const options = [1, 2, 3, 4]
-              .map((i) => ({
-                text: row[`option${i}`] || '',
-                image: null,
-                isCorrect: correctAnswers.includes((row[`option${i}`] || '').trim()),
-              }))
+              .map((i) => {
+                const optionText = (row[`option${i}`] || '').trim();
+                const isCorrect = correctAnswers.includes(optionText);
+                return {
+                  text: optionText,
+                  image: null,
+                  isCorrect: isCorrect,
+                };
+              })
               .filter(opt => opt.text);
-
-            return {
-              section_id: SECTION_CODE_TO_ID[row.section as keyof typeof SECTION_CODE_TO_ID] || SECTION_CODE_TO_ID['qa'],
+            const question = {
+              section: row.section ? row.section.trim() : sections[0] || "Section 1",
               question: row.question || '',
-              questionType,
+              questionType: questionType as 'single' | 'multiple',
               explanation: row.explanation || '',
               marks: row.marks || '1',
               image: null,
@@ -293,28 +271,74 @@ export default function CreateQuizPage() {
                 { text: '', image: null, isCorrect: false },
               ]
             };
+            return question;
           });
-
-          setValue('questions', parsedQuestions);
-          showToast('CSV imported successfully!', 'success');
-        } catch {
+          // Debug: log parsed questions
+          console.log('Parsed CSV questions:', parsedQuestions);
+          // Validate all required fields
+          const invalid = parsedQuestions.find(q =>
+            !q.question.trim() ||
+            !q.section.trim() ||
+            !q.marks ||
+            !q.options || q.options.length < 2 ||
+            !q.options.some(opt => opt.isCorrect)
+          );
+          if (invalid) {
+            showToast('CSV is missing required fields or has invalid data. Each question must have text, section, marks, at least 2 options, and at least 1 correct answer.', 'error');
+            return;
+          }
+          // Add any new sections from CSV
+          const csvSections = Array.from(new Set(parsedQuestions.map(q => q.section)));
+          setSections(prev => Array.from(new Set([...prev, ...csvSections])));
+          // Clear existing questions first
+          reset({ ...methods.getValues(), questions: [] });
+          setTimeout(() => {
+            setValue('questions', parsedQuestions);
+            showToast('CSV imported successfully!', 'success');
+            // Optionally, force validation
+            if (methods.trigger) methods.trigger();
+          }, 100);
+        } catch (error) {
           showToast('Invalid CSV format', 'error');
         }
       },
-      error: () => showToast('Failed to read CSV', 'error'),
+      error: (error) => {
+        showToast('Failed to read CSV', 'error');
+      },
     });
   };
 
   const onSubmit = async (data: QuizFormValues, isDraft: boolean) => {
+    if (isSubmitting) return; // Prevent double submit
+    setIsSubmitting(true); // Move this up to prevent race conditions
     if (!isLoaded || !isSignedIn || !user?.id) {
-      showToast('Please sign in', 'error');
+      showToast('Please sign in to create a quiz.', 'error');
+      setIsSubmitting(false);
       return;
     }
-
-    setIsSubmitting(true);
+    // Basic client-side validation for required fields
+    if (!data.quizTitle.trim()) {
+      showToast('Quiz title is required.', 'error');
+      setIsSubmitting(false);
+      return;
+    }
+    if (!data.questions || data.questions.length === 0) {
+      showToast('At least one question is required to create a quiz.', 'error');
+      setIsSubmitting(false);
+      return;
+    }
+    if (data.questions.some(q => !q.question.trim())) {
+      showToast('All questions must have text.', 'error');
+      setIsSubmitting(false);
+      return;
+    }
+    if (data.questions.some(q => !q.section || !q.section.trim())) {
+      showToast('Each question must be assigned to a section.', 'error');
+      setIsSubmitting(false);
+      return;
+    }
     try {
       const accessCode = uuidv4().split('-')[0];
-      
       // 1. First create the quiz entry
       const { data: quiz, error: quizError } = await supabase
         .from('quizzes')
@@ -334,25 +358,65 @@ export default function CreateQuizPage() {
           access_code: accessCode,
           is_draft: isDraft,
           user_id: user.id,
-          sections_enabled: data.sectionsEnabled,
         })
         .select('id, access_code')
         .single();
 
       if (quizError) {
-        console.error('Quiz insert error:', quizError, JSON.stringify(quizError));
-        showToast(quizError.message || JSON.stringify(quizError), 'error');
+        let msg = quizError.message || 'Unknown error while creating quiz.';
+        if (msg.includes('duplicate')) {
+          msg = 'A quiz with similar details already exists. Try changing the title or access code.';
+        } else if (msg.includes('violates')) {
+          msg = 'Some required fields are missing or invalid. Please check your input.';
+        } else if (msg.includes('connection')) {
+          msg = 'Could not connect to the database. Please check your internet connection.';
+        }
+        showToast(msg, 'error');
         setIsSubmitting(false);
         return;
       }
       if (!quiz) {
-        console.error('Quiz insert returned no data');
-        showToast('Quiz insert returned no data', 'error');
+        showToast('Quiz could not be created. Please try again.', 'error');
         setIsSubmitting(false);
         return;
       }
 
-      // 2. Process all questions
+      // 2. Insert all unique, trimmed sections for this quiz into the sections table
+      const uniqueSections = Array.from(new Set(data.questions.map(q => q.section.trim())));
+      const sectionInserts = uniqueSections.map(name => ({ quiz_id: quiz.id, name }));
+      let { data: insertedSections, error: sectionInsertError } = await supabase
+        .from('sections')
+        .insert(sectionInserts)
+        .select();
+      if (sectionInsertError) {
+        let msg = sectionInsertError.message || 'Failed to insert sections.';
+        if (msg.includes('duplicate')) {
+          msg = 'Duplicate section names found. Please ensure all section names are unique.';
+        }
+        showToast(msg, 'error');
+        setIsSubmitting(false);
+        return;
+      }
+      // If insertedSections is empty, fetch from DB (Supabase bug workaround)
+      if (!insertedSections || insertedSections.length === 0) {
+        const { data: fetchedSections, error: fetchSectionsError } = await supabase
+          .from('sections')
+          .select('*')
+          .eq('quiz_id', quiz.id);
+        if (fetchSectionsError || !fetchedSections) {
+          showToast('Sections could not be saved. Please try again.', 'error');
+          setIsSubmitting(false);
+          return;
+        }
+        insertedSections = fetchedSections;
+      }
+      // Map section name to section_id
+      const sectionNameToId: Record<string, number> = {};
+      for (const section of insertedSections) {
+        sectionNameToId[section.name.trim()] = section.id;
+      }
+
+      // 3. Process all questions
       for (const q of data.questions) {
         // Upload question image if exists
         const questionImageUrl = q.image instanceof File 
@@ -375,7 +439,7 @@ export default function CreateQuizPage() {
           .map((opt, index) => opt.is_correct ? index : null)
           .filter(index => index !== null);
 
-        // Insert question with all data
+        // Insert question with all data, using section_id
         const { error: questionError } = await supabase
           .from('questions')
           .insert({
@@ -387,14 +451,17 @@ export default function CreateQuizPage() {
             image_url: questionImageUrl,
             options: processedOptions,
             correct_answers: correctAnswers,
-            section_id: q.section_id,
+            section_id: sectionNameToId[q.section.trim()],
             blank_answers: null,
             matching_pairs: null
           });
 
         if (questionError) {
-          console.error('Question insert error:', questionError, JSON.stringify(questionError));
-          showToast(questionError.message || JSON.stringify(questionError), 'error');
+          let msg = questionError.message || 'Failed to add a question.';
+          if (msg.includes('violates')) {
+            msg = 'Some question fields are missing or invalid. Please check all questions.';
+          }
+          showToast(msg, 'error');
           setIsSubmitting(false);
           return;
         }
@@ -407,8 +474,13 @@ export default function CreateQuizPage() {
       }
       showToast(`Quiz ${isDraft ? 'saved as draft' : 'published'}!`, 'success');
     } catch (err: any) {
-      console.error('Quiz submission error:', err, JSON.stringify(err));
-      showToast(err?.message || JSON.stringify(err) || 'Error saving quiz', 'error');
+      let msg = err?.message || JSON.stringify(err) || 'Error saving quiz.';
+      if (msg.includes('connection')) {
+        msg = 'Could not connect to the database. Please check your internet connection.';
+      } else if (msg.includes('timeout')) {
+        msg = 'The request timed out. Please try again.';
+      }
+      showToast(msg, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -434,20 +506,25 @@ export default function CreateQuizPage() {
     }
   };
 
-  const handleSectionToggle = (section: QuizSection) => {
-    if (sectionsEnabled.includes(section)) {
-      setSectionsEnabled(sectionsEnabled.filter((s) => s !== section));
-    } else {
-      setSectionsEnabled([...sectionsEnabled, section]);
-    }
-  };
-
   const QuestionAccordion = React.memo(function QuestionAccordion({ q, i, opts }: { q: any, i: number, opts: any[] }) {
+    // Memoize expensive watch calls
+    const questionText = useWatch({ control, name: `questions.${i}.question` });
+    const questionType = useWatch({ control, name: `questions.${i}.questionType` });
+    const sectionId = useWatch({ control, name: `questions.${i}.section` });
+    const marks = useWatch({ control, name: `questions.${i}.marks` });
+    const questionImage = useWatch({ control, name: `questions.${i}.image` });
+    
+    // Memoize section label
+    const sectionLabel = React.useMemo(() => {
+      return sections.includes(sectionId) ? sectionId : 'Unknown Section';
+    }, [sectionId]);
+
+    const isExpanded = expandedIndex === i;
     return (
       <Slide key={q.id} direction="up" in mountOnEnter unmountOnExit>
         <Accordion
-          expanded={expandedIndex === i}
-          onChange={() => setExpandedIndex(expandedIndex === i ? -1 : i)}
+          expanded={isExpanded}
+          onChange={() => setExpandedIndex(isExpanded ? -1 : i)}
           sx={{ borderRadius: 3, boxShadow: 2, mb: 1, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}
           id={`question-accordion-${i}`}
         >
@@ -455,22 +532,12 @@ export default function CreateQuizPage() {
             <Box sx={{ flex: 1 }}>
               <Stack direction="row" alignItems="center" spacing={2}>
                 <Chip label={`Question ${i + 1}`} variant="outlined" size="medium" sx={{ fontWeight: 600, fontSize: '1.05rem', bgcolor: 'background.paper', color: 'text.primary', borderColor: 'grey.400' }} />
-                <Typography fontWeight={600} sx={{ color: 'text.primary' }}>{watch(`questions.${i}.question`) || `Question ${i + 1}`}</Typography>
+                <Typography fontWeight={600} sx={{ color: 'text.primary' }}>{questionText || `Question ${i + 1}`}</Typography>
               </Stack>
               <Stack direction="row" spacing={1} alignItems="center" mt={1}>
-                <Chip 
-                  label={SECTION_LABELS[watch(`questions.${i}.section_id`) as QuizSection].title} 
-                  variant="outlined" 
-                  size="small" 
-                  sx={{ 
-                    bgcolor: 'background.paper', 
-                    color: 'text.secondary', 
-                    borderColor: 'grey.300',
-                    fontWeight: 500 
-                  }} 
-                />
-                <Chip label={watch(`questions.${i}.questionType`) === 'multiple' ? 'Multiple' : 'Single'} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
-                <Chip label={`Marks: ${watch(`questions.${i}.marks`)}`} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
+                <Chip label={sectionLabel} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300', fontWeight: 500 }} />
+                <Chip label={questionType === 'multiple' ? 'Multiple' : 'Single'} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
+                <Chip label={`Marks: ${marks}`} variant="outlined" size="small" sx={{ bgcolor: 'background.paper', color: 'text.secondary', borderColor: 'grey.300' }} />
               </Stack>
             </Box>
             <Stack direction="row" spacing={1}>
@@ -486,13 +553,14 @@ export default function CreateQuizPage() {
             </Stack>
           </AccordionSummary>
           <AccordionDetails>
+            {isExpanded ? (
             <Stack spacing={2}>
               <TextField label="Question" {...register(`questions.${i}.question`)} fullWidth required error={!!errors.questions?.[i]?.question} helperText={errors.questions?.[i]?.question?.message} />
               
               {/* Question image upload */}
               <Box display="flex" alignItems="center" gap={2}>
-                {watch(`questions.${i}.image`) && typeof watch(`questions.${i}.image`) === 'string' && (
-                  <img src={watch(`questions.${i}.image`)} alt="Question" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
+                {questionImage && typeof questionImage === 'string' && (
+                  <img src={questionImage} alt="Question" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee' }} />
                 )}
                 <input
                   type="file"
@@ -523,7 +591,7 @@ export default function CreateQuizPage() {
                   </Tooltip>
                 </label>
                 {uploadingImageIndex && uploadingImageIndex.q === i && uploadingImageIndex.o === -1 && <LinearProgress sx={{ width: 40, mt: 1 }} />}
-                {watch(`questions.${i}.image`) && typeof watch(`questions.${i}.image`) === 'string' && (
+                {questionImage && typeof questionImage === 'string' && (
                   <IconButton color="error" onClick={() => setValue(`questions.${i}.image`, null)}>
                     <DeleteIcon fontSize="small" />
                   </IconButton>
@@ -531,7 +599,7 @@ export default function CreateQuizPage() {
               </Box>
               
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                <Select label="Type" value={watch(`questions.${i}.questionType`) as 'single' | 'multiple'} onChange={e => setValue(`questions.${i}.questionType`, e.target.value as 'single' | 'multiple')} fullWidth>
+                <Select label="Type" value={questionType as 'single' | 'multiple'} onChange={e => setValue(`questions.${i}.questionType`, e.target.value as 'single' | 'multiple')} fullWidth>
                   <MenuItem value="single">Single Correct</MenuItem>
                   <MenuItem value="multiple">Multiple Correct</MenuItem>
                 </Select>
@@ -544,40 +612,21 @@ export default function CreateQuizPage() {
               <FormControl fullWidth sx={{ mt: 2 }}>
                 <InputLabel>Question Section *</InputLabel>
                 <Select
-                  value={watch(`questions.${i}.section_id`) || SECTION_CODE_TO_ID['qa']}
+                    value={sectionId || sections[0]}
                   label="Question Section *"
-                  onChange={(e) => setValue(`questions.${i}.section_id`, parseInt(e.target.value))}
-                  required
-                  sx={{
-                    '& .MuiSelect-select': {
-                      display: 'flex',
-                      alignItems: 'center'
-                    }
-                  }}
-                >
-                  {QuizSectionEnum.options.map((section) => (
-                    <MenuItem 
-                      key={section} 
-                      value={SECTION_CODE_TO_ID[section]}
-                      disabled={sectionsEnabled && !sectionsEnabled.includes(section)}
-                      sx={{
-                        py: 2,
-                        borderLeft: '4px solid',
-                        borderColor: SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['qa'] ? 'primary.main' : 
-                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['lr'] ? 'secondary.main' :
-                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['va'] ? 'success.main' :
-                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['di'] ? 'info.main' :
-                                    SECTION_CODE_TO_ID[section] === SECTION_CODE_TO_ID['gk'] ? 'warning.main' : 'error.main'
-                      }}
-                    >
-                      <Box>
-                        <Typography fontWeight={600}>{SECTION_LABELS[section].title}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {SECTION_LABELS[section].description}
-                        </Typography>
-                      </Box>
-                    </MenuItem>
-                  ))}
+                    onChange={(e) => {
+                      if (e.target.value === "__add_new__") {
+                        setAddSectionDialog({ open: true, qIndex: i });
+                      } else {
+                        setValue(`questions.${i}.section`, e.target.value);
+                      }
+                    }}
+                    required
+                  >
+                    {sections.map((section) => (
+                      <MenuItem key={section} value={section}>{section}</MenuItem>
+                    ))}
+                    <MenuItem value="__add_new__" sx={{ fontStyle: 'italic', color: 'primary.main' }}>+ Add new section</MenuItem>
                 </Select>
               </FormControl>
               
@@ -627,7 +676,7 @@ export default function CreateQuizPage() {
                         </IconButton>
                       )}
                     </Box>
-                    {watch(`questions.${i}.questionType`) === 'single' ? (
+                    {questionType === 'single' ? (
                       <Tooltip title={opt.isCorrect ? 'Correct Answer' : 'Mark as Correct'}>
                         <Radio
                           checked={opt.isCorrect || false}
@@ -657,6 +706,7 @@ export default function CreateQuizPage() {
                 <Button variant="outlined" onClick={() => setValue(`questions.${i}.options`, [...opts, { text: '', image: null, isCorrect: false }])} sx={{ mt: 1 }}>+ Add Option</Button>
               </Stack>
             </Stack>
+            ) : null}
           </AccordionDetails>
         </Accordion>
       </Slide>
@@ -715,9 +765,21 @@ export default function CreateQuizPage() {
                 <input type="file" hidden accept=".csv" onChange={handleCsvUpload} />
               </Button>
               <Typography variant="body2" color="text.secondary">
-                Format: question,option1,option2,option3,option4,correct_answers,explanation,marks,section
+                Format: section,question,option1,option2,option3,option4,correct_answers,marks,explanation<br/>
+                <b>Note:</b> For multiple correct answers, use a semicolon (;) to separate them, and do not use quotes. Example: <code>Helium;Argon</code>
               </Typography>
             </Stack>
+          </Box>
+
+          {/* Add CSV template and example above the CSV import UI */}
+          <Box mb={4}>
+            <Typography variant="body2" mb={1}>
+              Download a ready-to-use CSV template for bulk question import.<br/>
+              <b>Note:</b> For multiple correct answers, use a semicolon (;) to separate them, and do not use quotes. Example: <code>Helium;Argon</code>
+            </Typography>
+            <Button variant="outlined" color="primary" href="/assets/quiz-template.csv" download>
+              Download CSV Template
+            </Button>
           </Box>
 
           <FormProvider {...methods}>
@@ -729,9 +791,19 @@ export default function CreateQuizPage() {
                 <Paper elevation={3} sx={{ p: 3, borderRadius: 3, mb: 3 }}>
                   <Typography variant="h6" sx={{ mb: 2, color: 'primary.main' }}>Quiz Information</Typography>
                   <Stack spacing={2}>
-                    <TextField label="Quiz Title" {...register("quizTitle")}
-                      fullWidth helperText="Enter a descriptive title for your quiz."
-                      error={!!errors.quizTitle} />
+                    <Controller
+                      name="quizTitle"
+                      control={control}
+                      render={({ field }) => (
+                        <TextField
+                          label="Quiz Title"
+                          {...field}
+                          fullWidth
+                          helperText="Enter a descriptive title for your quiz."
+                          error={!!errors.quizTitle}
+                        />
+                      )}
+                    />
                     {errors.quizTitle && <Typography color="error" variant="caption">{errors.quizTitle.message}</Typography>}
                     <TextField label="Description" {...register("description")}
                       fullWidth multiline minRows={2}
@@ -764,56 +836,12 @@ export default function CreateQuizPage() {
                   </Stack>
                 </Paper>
 
-                {/* Section Enable/Disable Checkboxes */}
-                <Paper sx={{ p: 3, mb: 3, borderRadius: 3, boxShadow: 2 }}>
-                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                    Select Sections to Enable
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Enable the sections you want to include in this quiz. You can assign questions to these sections.
-                  </Typography>
-                  <FormGroup row sx={{ gap: 2 }}>
-                    {QuizSectionEnum.options.map((section) => (
-                      <Paper 
-                        key={section}
-                        elevation={sectionsEnabled?.includes(section) ? 3 : 1}
-                        sx={{ 
-                          p: 2, 
-                          borderRadius: 2, 
-                          border: '1px solid', 
-                          borderColor: sectionsEnabled?.includes(section) ? 'primary.main' : 'divider',
-                          minWidth: 200,
-                          flexGrow: 1
-                        }}
-                      >
-                        <FormControlLabel
-                          control={
-                            <Checkbox
-                              checked={Array.isArray(sectionsEnabled) && sectionsEnabled.includes(section)}
-                              onChange={() => handleSectionToggle(section)}
-                              color="primary"
-                            />
-                          }
-                          label={
-                            <Box>
-                              <Typography fontWeight={600}>{SECTION_LABELS[section].title}</Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                {SECTION_LABELS[section].description}
-                              </Typography>
-                            </Box>
-                          }
-                          sx={{ width: '100%' }}
-                        />
-                      </Paper>
-                    ))}
-                  </FormGroup>
-                </Paper>
-
                 {/* Question Navigation Bar */}
                 <Paper elevation={2} sx={{ p: 2, borderRadius: 2, mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', bgcolor: 'background.paper', boxShadow: 1 }}>
                   {questionFields.map((q, i) => {
                     const qVal = watch(`questions.${i}`);
                     const isComplete = qVal && qVal.question && qVal.options && qVal.options.length >= 2 && qVal.options.every((opt: any) => opt.text);
+                    
                     return (
                       <Chip
                         key={q.id}
@@ -853,7 +881,7 @@ export default function CreateQuizPage() {
                     color="primary"
                     onClick={() =>
                       append({
-                        section_id: SECTION_CODE_TO_ID['qa'],
+                        section: sections[0],
                         question: '',
                         questionType: 'single',
                         image: null,
@@ -930,6 +958,42 @@ export default function CreateQuizPage() {
               if (deleteDialog.index !== null) remove(deleteDialog.index);
               setDeleteDialog({ open: false, index: null });
             }}>Delete</Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Add Dialog for inline section creation */}
+        <Dialog open={addSectionDialog.open} onClose={() => setAddSectionDialog({ open: false, qIndex: null })}>
+          <DialogTitle>Add New Section</DialogTitle>
+          <DialogContent>
+            <TextField
+              autoFocus
+              margin="dense"
+              label="Section Name"
+              fullWidth
+              value={inlineNewSection}
+              onChange={e => setInlineNewSection(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  if (inlineNewSection.trim() && !sections.includes(inlineNewSection.trim())) {
+                    setSections([...sections, inlineNewSection.trim()]);
+                    if (addSectionDialog.qIndex !== null) setValue(`questions.${addSectionDialog.qIndex}.section`, inlineNewSection.trim());
+                    setInlineNewSection("");
+                    setAddSectionDialog({ open: false, qIndex: null });
+                  }
+                }
+              }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setAddSectionDialog({ open: false, qIndex: null })}>Cancel</Button>
+            <Button onClick={() => {
+              if (inlineNewSection.trim() && !sections.includes(inlineNewSection.trim())) {
+                setSections([...sections, inlineNewSection.trim()]);
+                if (addSectionDialog.qIndex !== null) setValue(`questions.${addSectionDialog.qIndex}.section`, inlineNewSection.trim());
+                setInlineNewSection("");
+                setAddSectionDialog({ open: false, qIndex: null });
+              }
+            }} variant="contained">Add</Button>
           </DialogActions>
         </Dialog>
       </Container>

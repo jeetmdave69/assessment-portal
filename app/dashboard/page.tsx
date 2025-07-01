@@ -1,30 +1,35 @@
-import { currentUser } from '@clerk/nextjs/server';
-import { redirect } from 'next/navigation';
+"use client";
+import { useEffect } from "react";
+import { useUser } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
+import RoleRedirectSplash from "../../components/RoleRedirectSplash";
 
-export default async function DashboardRedirectPage() {
-  const user = await currentUser();
+export default function Dashboard() {
+  const { isLoaded, user } = useUser();
+  const router = useRouter();
 
-  if (!user) {
-    redirect('/sign-in');
-  }
+  useEffect(() => {
+    if (!isLoaded) return;
+    const role = user?.publicMetadata?.role;
+    if (!role) return router.push("/unauthorized");
+    setTimeout(() => {
+      if (role === "admin") router.push("/dashboard/admin");
+      else if (role === "teacher") router.push("/dashboard/teacher");
+      else if (role === "student") router.push("/dashboard/student");
+      else router.push("/unauthorized");
+    }, 1400); // Show splash for 1.4s
+  }, [isLoaded, user, router]);
 
-  const role = user.publicMetadata?.role;
-
-  switch (role) {
-    case 'student':
-      redirect('/dashboard/student');
-    case 'teacher':
-      redirect('/dashboard/teacher');
-    case 'admin':
-      redirect('/dashboard/admin');
-    default:
-      return (
-        <div className="h-screen flex items-center justify-center">
-          <div className="text-center space-y-4">
-            <h1 className="text-2xl font-semibold">Access Denied</h1>
-            <p className="text-gray-500">No valid role assigned. Please contact support.</p>
-          </div>
-        </div>
-      );
-  }
+  return (
+    <RoleRedirectSplash
+      name={
+        typeof user?.firstName === 'string' ? user.firstName :
+        typeof user?.fullName === 'string' ? user.fullName :
+        typeof user?.username === 'string' ? user.username :
+        typeof user?.emailAddresses?.[0]?.emailAddress === 'string' ? user.emailAddresses[0].emailAddress :
+        "User"
+      }
+      role={typeof user?.publicMetadata?.role === 'string' ? user.publicMetadata.role : 'student'}
+    />
+  );
 }

@@ -31,7 +31,7 @@ export const quizSchema = z.object({
         questionType: z.enum(["single", "multiple"], {
           required_error: "Question type is required",
         }),
-        section_id: z.number().int().min(1, "Section is required"),
+        section: z.string().min(1, "Section is required"),
         image: z.any().optional(),
         explanation: z.string().optional(),
         marks: z.string().min(1, "Marks are required"),
@@ -116,7 +116,7 @@ export const defaultQuizValues: QuizFormValues = {
     {
       question: "",
       questionType: "single",
-      section_id: 1,
+      section: "Section 1",
       image: null,
       explanation: "",
       marks: "1",
