@@ -85,18 +85,14 @@ export default function ResultPage() {
         .eq('quiz_id', attempt.quiz_id);
       const parsedQuestions = (questionData || []).map((q: any) => {
         const options = typeof q.options === 'string' ? JSON.parse(q.options || '[]') : q.options || [];
-        const correct = typeof q.correct_answers === 'string' ? JSON.parse(q.correct_answers || '[]') : q.correct_answers || [];
         return {
           id: q.id,
           question_text: q.question_text,
           explanation: q.explanation || '',
-          options: options.map((opt: any) => {
-            const text = typeof opt === 'string' ? opt : opt?.text || '';
-            const isCorrect = correct.some(
-              (c: any) => (typeof c === 'string' ? c.trim() : c?.text?.trim()) === text.trim()
-            );
-            return { text, isCorrect };
-          }),
+          options: options.map((opt: any) => ({
+            text: typeof opt === 'string' ? opt : opt?.text || '',
+            isCorrect: !!opt.isCorrect,
+          })),
         };
       });
       setQuestions(parsedQuestions);
@@ -141,9 +137,19 @@ export default function ResultPage() {
     );
   }
 
-  // Show summary instantly
-  const total = Object.keys(attempt.correct_answers || {}).length;
-  const score = attempt?.score ?? 0;
+  // Calculate score using indices
+  const total = questions.length;
+  let score = 0;
+  questions.forEach(q => {
+    const userIndices = attempt.answers?.[q.id] ?? [];
+    const correctIndices = q.options
+      .map((opt: any, idx: number) => (opt.isCorrect ? idx : null))
+      .filter((idx: number | null) => idx !== null);
+    const isCorrect =
+      userIndices.length === correctIndices.length &&
+      userIndices.every((idx: number) => correctIndices.includes(idx));
+    if (isCorrect) score++;
+  });
   const isPassed = total > 0 && (score / total) * 100 >= PASS_THRESHOLD;
 
   // Group questions by section
@@ -165,13 +171,13 @@ export default function ResultPage() {
   Object.entries(questionsBySection).forEach(([section, qs]) => {
     let correct = 0;
     (qs as any[]).forEach((q: any) => {
-      const userAns = attempt.answers?.[q.id] ?? [];
-      const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
-      const correctAns = attempt.correct_answers?.[q.id] ?? [];
-      const correctAnswers = Array.isArray(correctAns) ? correctAns.map(normalize) : [normalize(correctAns)];
+      const userIndices = attempt.answers?.[q.id] ?? [];
+      const correctIndices = q.options
+        .map((opt: any, idx: number) => (opt.isCorrect ? idx : null))
+        .filter((idx: number | null) => idx !== null);
       const isCorrect =
-        userAnswers.length === correctAnswers.length &&
-        userAnswers.every((ans: any) => correctAnswers.includes(ans));
+        userIndices.length === correctIndices.length &&
+        userIndices.every((idx: number) => correctIndices.includes(idx));
       if (isCorrect) correct++;
     });
     sectionScores[section] = { correct, total: (qs as any[]).length };
@@ -239,13 +245,13 @@ export default function ResultPage() {
                   </Typography>
             <Stack spacing={3}>
                     {qs.map((q, idx) => {
-                const userAns = attempt.answers?.[q.id] ?? [];
-                const userAnswers = Array.isArray(userAns) ? userAns.map(normalize) : [normalize(userAns)];
-                const correctAns = attempt.correct_answers?.[q.id] ?? [];
-                const correctAnswers = Array.isArray(correctAns) ? correctAns.map(normalize) : [normalize(correctAns)];
+                const userIndices = attempt.answers?.[q.id] ?? [];
+                const correctIndices = q.options
+                  .map((opt: any, idx: number) => (opt.isCorrect ? idx : null))
+                  .filter((idx: number | null) => idx !== null);
                 const isCorrect =
-                  userAnswers.length === correctAnswers.length &&
-                  userAnswers.every((ans) => correctAnswers.includes(ans));
+                  userIndices.length === correctIndices.length &&
+                  userIndices.every((idx: number) => correctIndices.includes(idx));
                 return (
                   <motion.div
                     key={q.id}
@@ -286,8 +292,7 @@ export default function ResultPage() {
                         </Stack>
                         <Stack spacing={1} mt={1}>
                           {q.options.map((opt: any, i: number) => {
-                            const normalizedOpt = normalize(opt.text);
-                            const selected = userAnswers.includes(normalizedOpt);
+                            const selected = userIndices.includes(i);
                             const isOptionCorrect = opt.isCorrect;
                             return (
                               <Paper

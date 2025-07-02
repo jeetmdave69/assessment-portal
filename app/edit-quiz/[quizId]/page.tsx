@@ -310,12 +310,12 @@ export default function EditQuizPage() {
                   variant="outlined"
                   onClick={() =>
                     append({
+                      section: "Section 1",
                       question: "",
                       image: null,
                       explanation: "",
                       questionType: 'single',
                       marks: '1',
-                      section_id: 1,
                       options: [
                         { text: "", image: null, isCorrect: false },
                         { text: "", image: null, isCorrect: false },

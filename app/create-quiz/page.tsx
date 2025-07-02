@@ -294,6 +294,9 @@ export default function CreateQuizPage() {
           reset({ ...methods.getValues(), questions: [] });
           setTimeout(() => {
             setValue('questions', parsedQuestions);
+            // Automatically update totalMarks to sum of all question marks
+            const total = parsedQuestions.reduce((sum, q) => sum + parseInt(q.marks), 0);
+            setValue('totalMarks', total.toString());
             showToast('CSV imported successfully!', 'success');
             // Optionally, force validation
             if (methods.trigger) methods.trigger();
@@ -730,48 +733,77 @@ export default function CreateQuizPage() {
               </IconButton>
             </Tooltip>
             <Button onClick={() => router.push('/dashboard')} variant="outlined" color="primary">
-              ← Dashboard
+              ← Back to Dashboard
             </Button>
           </Stack>
         </Paper>
         <Paper elevation={3} sx={{ p: 4, borderRadius: 3 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
-            <Typography variant="h4" fontWeight={600} color="primary">
-              Create New Quiz
-            </Typography>
-            <Tooltip title="Toggle theme">
-              <IconButton onClick={toggleMode}>
-                {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
-              </IconButton>
-            </Tooltip>
-          </Stack>
-
-          <Button onClick={() => router.push('/dashboard')} sx={{ mb: 3 }}>
-            ← Back to Dashboard
-          </Button>
-
+          {/* Import Questions Section (CSV Upload) */}
           <Box sx={{ mb: 4, p: 3, bgcolor: 'background.paper', borderRadius: 2, boxShadow: 1 }}>
             <Typography variant="h6" gutterBottom>
               Import Questions
             </Typography>
-            <Stack direction="row" alignItems="center" spacing={2}>
-              <Button
-                variant="contained"
-                component="label"
-                startIcon={<ImageIcon />}
-                sx={{ textTransform: 'none' }}
+            <Paper elevation={2} sx={{ p: 3, borderRadius: 2, bgcolor: 'grey.50', mb: 2 }}>
+              <Box
+                sx={{
+                  border: '2px dashed',
+                  borderColor: 'primary.main',
+                  borderRadius: 2,
+                  p: 4,
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  transition: 'border-color 0.2s',
+                  '&:hover': { borderColor: 'primary.dark', bgcolor: 'grey.100' },
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onClick={() => document.getElementById('csv-upload-input')?.click()}
               >
-                Upload CSV
-                <input type="file" hidden accept=".csv" onChange={handleCsvUpload} />
-              </Button>
-              <Typography variant="body2" color="text.secondary">
-                Format: section,question,option1,option2,option3,option4,correct_answers,marks,explanation<br/>
-                <b>Note:</b> For multiple correct answers, use a semicolon (;) to separate them, and do not use quotes. Example: <code>Helium;Argon</code>
+                <ImageIcon sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
+                <Typography variant="h6" color="primary" fontWeight={600} mb={1}>
+                  Drag & Drop or Click to Upload CSV
+                </Typography>
+                <Typography variant="body2" color="text.secondary" mb={2}>
+                  Only .csv files are supported. Max 1MB.
+                </Typography>
+                <Button
+                  variant="contained"
+                  component="label"
+                  sx={{ textTransform: 'none', fontWeight: 600 }}
+                >
+                  Select CSV File
+                  <input
+                    id="csv-upload-input"
+                    type="file"
+                    hidden
+                    accept=".csv"
+                    onChange={handleCsvUpload}
+                  />
+                </Button>
+              </Box>
+              <Typography variant="caption" color="text.secondary" display="block" mt={2}>
+                Tip: You can prepare your questions in Excel, Google Sheets, or even Notepad (as plain text) and export or save as CSV.
               </Typography>
-            </Stack>
+            </Paper>
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                <b>CSV Format:</b> section,question,option1,option2,option3,option4,correct_answers,marks,explanation<br/>
+                <b>Single correct answer:</b> just the option text (e.g., <code>35</code>)<br/>
+                <b>Multiple correct answers:</b> separate with a semicolon <code>;</code> (e.g., <code>7;19</code>)<br/>
+                <b>Special notes:</b> For text with commas, quotes, or semicolons, use double quotes. For double quotes inside text, use two double quotes (<code>""</code>).<br/>
+                <b>Example:</b>
+              </Typography>
+              <Box component="pre" sx={{ fontSize: '0.85rem', bgcolor: 'grey.100', p: 1, borderRadius: 1, overflowX: 'auto' }}>
+{`section,question,option1,option2,option3,option4,correct_answers,marks,explanation
+Mathematics,What is 5 × 7?,25,30,35,40,35,1,Basic multiplication
+Science,Select all mammals,Dolphin,Eagle,Shark,Bat,Dolphin;Bat,2,Mammals nurse their young
+Cricket,Who is known as the "God of Cricket"?,Virat Kohli,Sachin Tendulkar,MS Dhoni,Ricky Ponting,Sachin Tendulkar,1,Sachin is often called the 'God of Cricket'`}
+              </Box>
+            </Box>
           </Box>
-
-          {/* Add CSV template and example above the CSV import UI */}
+          {/* Download CSV Template Section */}
           <Box mb={4}>
             <Typography variant="body2" mb={1}>
               Download a ready-to-use CSV template for bulk question import.<br/>
@@ -781,7 +813,6 @@ export default function CreateQuizPage() {
               Download CSV Template
             </Button>
           </Box>
-
           <FormProvider {...methods}>
             <form onSubmit={handleSubmit((data) => onSubmit(data, false))}>
               <Stack spacing={4}>
@@ -811,7 +842,7 @@ export default function CreateQuizPage() {
                       error={!!errors.description} />
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                       <TextField label="Total Marks" type="number" {...register("totalMarks")}
-                        fullWidth helperText="Sum of all question marks."
+                        fullWidth helperText="Sum of all question marks. This will be automatically calculated and added."
                         error={!!errors.totalMarks} />
                       <TextField label="Duration (mins)" type="number" {...register("duration")}
                         fullWidth helperText="How long students have to complete the quiz."
@@ -913,15 +944,41 @@ export default function CreateQuizPage() {
           <DialogTitle>Quiz Created Successfully!</DialogTitle>
           <DialogContent>
             <Typography>Share this access code with your students:</Typography>
-            <Typography variant="h4" sx={{ mt: 2, mb: 1 }} color="primary" fontWeight="bold">
-              {accessCode}
-            </Typography>
+            <Box display="flex" alignItems="center" gap={1}>
+              <Typography variant="h4" sx={{ mt: 2, mb: 1 }} color="primary" fontWeight="bold">
+                {accessCode}
+              </Typography>
+              <Tooltip title={toast.open && toast.msg === 'Access code copied!' ? 'Copied!' : 'Copy to clipboard'}>
+                <IconButton
+                  aria-label="Copy access code"
+                  onClick={() => {
+                    if (accessCode) {
+                      navigator.clipboard.writeText(accessCode);
+                      setToast({ open: true, msg: 'Access code copied!', type: 'success' });
+                    }
+                  }}
+                  sx={{ mt: 1 }}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="7" y="7" width="10" height="10" rx="2" stroke="#1976d2" strokeWidth="2"/>
+                    <rect x="3" y="3" width="10" height="10" rx="2" stroke="#90caf9" strokeWidth="2"/>
+                  </svg>
+                </IconButton>
+              </Tooltip>
+            </Box>
             <Typography variant="body2">
               You can manage this quiz from your dashboard.
             </Typography>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => router.push('/dashboard')}>Go to Dashboard</Button>
+            <Button onClick={() => router.push('/dashboard')} variant="outlined" color="primary">
+              ← Back to Dashboard
+            </Button>
+            {accessCode && (
+              <Button onClick={() => router.push(`/edit-quiz/${accessCode}`)} variant="contained" color="primary">
+                Edit This Quiz
+              </Button>
+            )}
             <Button onClick={() => setOpenDialog(false)}>Close</Button>
           </DialogActions>
         </Dialog>

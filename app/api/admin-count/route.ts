@@ -1,14 +1,18 @@
-import { Clerk } from "@clerk/clerk-sdk-node";
+import { users } from "@clerk/clerk-sdk-node";
 import { NextRequest, NextResponse } from "next/server";
-
-const clerk = new Clerk({ secretKey: process.env.CLERK_SECRET_KEY! });
 
 export async function GET() {
   try {
-    const allUsers = await clerk.users.getUserList();
+    const allUsers = await users.getUserList();
     const admins = allUsers.filter((u: any) => u.publicMetadata?.role === "admin");
-    return NextResponse.json({ count: admins.length });
+    const teachers = allUsers.filter((u: any) => u.publicMetadata?.role === "teacher");
+    const students = allUsers.filter((u: any) => u.publicMetadata?.role === "student");
+    return NextResponse.json({
+      adminCount: admins.length,
+      teacherCount: teachers.length,
+      studentCount: students.length,
+    });
   } catch (err: any) {
-    return NextResponse.json({ count: 0, error: err.message }, { status: 500 });
+    return NextResponse.json({ adminCount: 0, teacherCount: 0, studentCount: 0, error: err.message }, { status: 500 });
   }
 } 

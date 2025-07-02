@@ -372,32 +372,33 @@ function TeacherDashboardPage() {
     
     const fetchStats = async () => {
       if (!user?.id) return;
-      
       setStatsLoading(true);
       try {
-        // Students
+        // Students (filter by teacher_id if available, else leave as is)
         const { count: students } = await supabase.from('student').select('id', { count: 'exact', head: true });
         setStudentCount(students || 0);
-        // Exams
-        const { count: exams } = await supabase.from('quizzes').select('id', { count: 'exact', head: true });
+        // Exams (only this teacher's)
+        const { count: exams } = await supabase.from('quizzes').select('id', { count: 'exact', head: true }).eq('user_id', user.id);
         setExamCount(exams || 0);
-        // Results
-        const { count: results } = await supabase.from('attempts').select('id', { count: 'exact', head: true });
+        // Results (attempts for this teacher's quizzes)
+        const { count: results } = await supabase
+          .from('attempts')
+          .select('id', { count: 'exact', head: true })
+          .in('quiz_id', (
+            (await supabase.from('quizzes').select('id').eq('user_id', user.id)).data?.map(q => q.id) || []
+          ));
         setResultCount(results || 0);
-        // Announcements
+        // Announcements (already filtered)
         const { count: announcements } = await supabase.from('announcements').select('id', { count: 'exact', head: true }).eq('sender_id', user.id);
         setAnnouncementCount(announcements || 0);
         // Recent results (last 8)
         const { data: recent } = await supabase
           .from('attempts')
-          .select(`
-            *,
-            quizzes:quiz_id(quiz_title, total_marks)
-          `)
+          .select(`*, quizzes:quiz_id(quiz_title, total_marks, user_id)`) // include user_id for filtering
           .order('submitted_at', { ascending: false })
           .order('created_at', { ascending: false })
           .limit(8);
-        setRecentResults(recent || []);
+        setRecentResults((recent || []).filter(r => r.quizzes?.user_id === user.id));
         setStatsLoading(false);
       } catch (error) {
         console.error('Error fetching stats:', error);
@@ -408,16 +409,37 @@ function TeacherDashboardPage() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (!user?.id) return;
     setExamsLoading(true);
     supabase
       .from('quizzes')
       .select('*')
       .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        setExams(data || []);
+      .then(async ({ data }) => {
+        const teacherExams = (data || []).filter((e: any) => e.user_id === user!.id);
+        const quizIds: number[] = teacherExams.map((q: any) => q.id);
+        if (quizIds.length === 0) {
+          setExams([]);
+          setExamsLoading(false);
+          return;
+        }
+        const { data: questions } = await supabase
+          .from('questions')
+          .select('id, quiz_id');
+        const questionCounts: Record<number, number> = {};
+        (questions || []).forEach((q: { quiz_id: number }) => {
+          if (quizIds.includes(q.quiz_id)) {
+            questionCounts[q.quiz_id] = (questionCounts[q.quiz_id] || 0) + 1;
+          }
+        });
+        const teacherExamsWithCounts = teacherExams.map((q: any) => ({
+          ...q,
+          questions_count: questionCounts[q.id] || 0,
+        }));
+        setExams(teacherExamsWithCounts);
         setExamsLoading(false);
       });
-  }, []);
+  }, [user?.id]);
 
   // Sidebar navigation links
   const sidebarLinks = [
@@ -465,7 +487,7 @@ function TeacherDashboardPage() {
     );
   }
 
-  if (!user) {
+  if (!user || !user.id) {
     return (
       <Box height="100vh" display="flex" justifyContent="center" alignItems="center">
         <Alert severity="error">You must be logged in to view this page</Alert>
@@ -625,7 +647,7 @@ function TeacherDashboardPage() {
             <Grid container spacing={3}>
               <Grid item xs={12} md={8}>
                 <Card sx={{ p: 2, boxShadow: 2 }}>
-                  <Typography variant="h6" fontWeight={700} mb={2}>Exams</Typography>
+                  <Typography variant="h5" fontWeight={700} mb={2}>Manage Quiz</Typography>
                   <TableContainer>
                     <Table>
                       <TableHead>
@@ -635,7 +657,7 @@ function TeacherDashboardPage() {
                           <TableCell>Description</TableCell>
                           <TableCell>No. of questions</TableCell>
                           <TableCell>Exam time</TableCell>
-                          <TableCell>Submission time</TableCell>
+                          <TableCell>End time</TableCell>
                           <TableCell>EDIT</TableCell>
                           <TableCell>DELETE</TableCell>
                         </TableRow>
@@ -651,9 +673,9 @@ function TeacherDashboardPage() {
                               <TableCell>{(dashboardExamPage - 1) * dashboardExamsPerPage + idx + 1}</TableCell>
                               <TableCell>{row.quiz_title}</TableCell>
                               <TableCell>{row.description}</TableCell>
-                              <TableCell>{row.nq}</TableCell>
-                              <TableCell>{row.extime ? format(new Date(row.extime), 'yyyy-MM-dd HH:mm') : '-'}</TableCell>
-                              <TableCell>{row.subt_time ? format(new Date(row.subt_time), 'yyyy-MM-dd HH:mm') : '-'}</TableCell>
+                              <TableCell>{row.questions_count ?? '-'}</TableCell>
+                              <TableCell>{row.extime ? format(new Date(row.extime), 'yyyy-MM-dd HH:mm') : (row.start_time ? format(new Date(row.start_time), 'yyyy-MM-dd HH:mm') : '-')}</TableCell>
+                              <TableCell>{row.end_time ? format(new Date(row.end_time), 'yyyy-MM-dd HH:mm') : '-'}</TableCell>
                               <TableCell>
                                 <Button size="small" variant="outlined" color="primary" startIcon={<EditIcon />} onClick={() => handleEditExam(row.id, row.nq)}>Edit</Button>
                               </TableCell>
@@ -694,10 +716,6 @@ function TeacherDashboardPage() {
                 </Card>
               </Grid>
             </Grid>
-            {/* Add Questions Form for edit */}
-            {editExam && (
-              <AddQuestionsForm quizId={editExam.quizId} nq={editExam.nq} />
-            )}
           </>
         )}
         {currentTab === 'exams' && (
@@ -970,7 +988,7 @@ function ExamResultsTable() {
                   <TableCell>Student Name</TableCell>
                   <TableCell>Score</TableCell>
                   <TableCell>Started At</TableCell>
-                  <TableCell>Submission Time</TableCell>
+                  <TableCell>End time</TableCell>
                   <TableCell>Duration (min)</TableCell>
                   <TableCell>Marked for Review</TableCell>
                 </TableRow>
@@ -1172,6 +1190,7 @@ function TeacherSettings({ user }: { user: any }) {
 }
 
 function ExamsSection() {
+  const { user } = useUser();
   const router = useRouter();
   const [exams, setExams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1180,16 +1199,17 @@ function ExamsSection() {
   const rowsPerPage = 10;
 
   const fetchExams = async () => {
+    if (!user?.id) return;
     setLoading(true);
     setError('');
-    const res = await fetch('/api/exams');
+    const res = await fetch(`/api/exams?user_id=${user.id}`);
     const data = await res.json();
     setLoading(false);
     if (!res.ok) setError(data.error || 'Error');
     else setExams(data.exams || []);
   };
 
-  useEffect(() => { fetchExams(); }, []);
+  useEffect(() => { fetchExams(); }, [user?.id]);
 
   // Pagination logic
   const pageCount = Math.ceil(exams.length / rowsPerPage);
@@ -1201,7 +1221,9 @@ function ExamsSection() {
         <Button 
           variant="contained" 
           startIcon={<AddIcon />} 
-          onClick={() => router.push('/create-quiz')}
+          onClick={async () => {
+            await router.push('/create-quiz');
+          }}
           sx={{ 
             background: '#002366', 
             color: '#fff', 
@@ -1224,7 +1246,7 @@ function ExamsSection() {
                 <TableCell>Description</TableCell>
                 <TableCell>No. of questions</TableCell>
                 <TableCell>Exam time</TableCell>
-                <TableCell>Submission time</TableCell>
+                <TableCell>End time</TableCell>
                 <TableCell>Edit</TableCell>
                 <TableCell>Delete</TableCell>
               </TableRow>
@@ -1235,9 +1257,9 @@ function ExamsSection() {
                   <TableCell>{(page - 1) * rowsPerPage + i + 1}</TableCell>
                   <TableCell>{exam.exname}</TableCell>
                   <TableCell>{exam.desp}</TableCell>
-                  <TableCell>{exam.nq}</TableCell>
+                  <TableCell>{exam.questions_count ?? '-'}</TableCell>
                   <TableCell>{exam.extime}</TableCell>
-                  <TableCell>{exam.subt}</TableCell>
+                  <TableCell>{exam.end_time ? format(new Date(exam.end_time), 'yyyy-MM-dd HH:mm') : '-'}</TableCell>
                   <TableCell>
                     <IconButton color="primary">
                       <EditIcon />
@@ -1252,17 +1274,20 @@ function ExamsSection() {
               ))}
             </TableBody>
           </Table>
-          {pageCount > 1 && (
-            <Box display="flex" justifyContent="center" mt={2}>
-              <Pagination
-                count={pageCount}
-                page={page}
-                onChange={(_, value) => setPage(value)}
-                color="primary"
-                shape="rounded"
-              />
-            </Box>
-          )}
+          <TablePagination
+            component="div"
+            count={exams.length}
+            page={page - 1}
+            onPageChange={(event, newPage) => setPage(newPage + 1)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={e => {
+              setPage(1);
+              // Optionally, you can allow changing rowsPerPage
+              // setRowsPerPage(parseInt(e.target.value, 10));
+            }}
+            rowsPerPageOptions={[rowsPerPage]}
+            labelRowsPerPage={''}
+          />
         </Paper>
       )}
     </Box>

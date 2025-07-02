@@ -15,16 +15,24 @@ import {
   Assignment as AssignmentIcon
 } from '@mui/icons-material';
 import { supabase } from '@/utils/supabaseClient';
+import TablePagination from '@mui/material/TablePagination';
 
 const sidebarLinks = [
   { text: 'Dashboard', icon: <DashboardIcon />, tab: 'dashboard' },
-  { text: 'Manage Users', icon: <GroupIcon />, tab: 'users' },
-  { text: 'Manage Quizzes', icon: <AssignmentIcon />, tab: 'quizzes' },
+  { text: 'Add User', icon: <GroupIcon />, tab: 'users' },
+  { text: 'Manage Users', icon: <AssignmentIcon />, tab: 'manage-users' },
   { text: 'Results', icon: <BarChartIcon />, tab: 'results' },
   { text: 'Announcements', icon: <MessageIcon />, tab: 'announcements' },
   { text: 'Settings', icon: <SettingsIcon />, tab: 'settings' },
   { text: 'Help', icon: <HelpIcon />, tab: 'help' },
   { text: 'Log out', icon: <LogoutIcon />, tab: 'logout' },
+];
+
+// New: User management table columns and actions
+const userRoleOptions = [
+  { value: 'student', label: 'Student' },
+  { value: 'teacher', label: 'Teacher' },
+  { value: 'admin', label: 'Admin' },
 ];
 
 export default function AdminDashboardPage() {
@@ -39,7 +47,13 @@ export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [students, setStudents] = useState<any[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
+  const [admins, setAdmins] = useState<any[]>([]);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+  const [userTableLoading, setUserTableLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<any>(null);
+  const [userPage, setUserPage] = useState(0);
+  const [userRowsPerPage, setUserRowsPerPage] = useState(10);
 
   // User creation form state
   const [formData, setFormData] = useState({
@@ -54,24 +68,30 @@ export default function AdminDashboardPage() {
   const [creating, setCreating] = useState(false);
   const [errorDetails, setErrorDetails] = useState<string[]>([]);
 
-  // Fetch counts and lists from unified users table
+  // Fetch counts and lists from Clerk API and quizzes from Supabase
   const fetchCountsAndLists = async () => {
     setLoading(true);
-    // Fetch all users
-    let users = [];
     try {
-      const { data, error } = await supabase.from('users').select('*');
-      if (error) throw error;
-      users = data || [];
+      const res = await fetch('/api/admin-count');
+      const data = await res.json();
+      setStudentCount(data.studentCount);
+      setTeacherCount(data.teacherCount);
+      setAdminCount(data.adminCount);
+
+      // Fetch paginated users for the table
+      const usersRes = await fetch(`/api/clerk-users?limit=${userRowsPerPage}&offset=${userPage * userRowsPerPage}`);
+      const usersData = await usersRes.json();
+      setStudents(usersData.filter((u: any) => u.role === 'student'));
+      setTeachers(usersData.filter((u: any) => u.role === 'teacher'));
+      setAdmins(usersData.filter((u: any) => u.role === 'admin'));
     } catch (err) {
-      users = [];
+      setStudentCount(0);
+      setTeacherCount(0);
+      setAdminCount(0);
+      setStudents([]);
+      setTeachers([]);
+      setAdmins([]);
     }
-    // Count by role
-    setStudentCount(users.filter((u: any) => u.role === 'student').length);
-    setTeacherCount(users.filter((u: any) => u.role === 'teacher').length);
-    setAdminCount(users.filter((u: any) => u.role === 'admin').length);
-    setStudents(users.filter((u: any) => u.role === 'student'));
-    setTeachers(users.filter((u: any) => u.role === 'teacher'));
     // Quizzes count (still from quizzes table)
     try {
       const { count: quizzes } = await supabase.from('quizzes').select('id', { count: 'exact', head: true });
@@ -84,7 +104,7 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     fetchCountsAndLists();
-  }, []);
+  }, [userPage, userRowsPerPage]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -154,6 +174,101 @@ export default function AdminDashboardPage() {
       "Admin"
     );
   };
+
+  // New: Render user management table
+  const renderUserManagementTable = () => (
+    <Box>
+      <Typography variant="h6" fontWeight={700} mb={2}>Manage Users</Typography>
+      <TableContainer component={Paper} sx={{ maxHeight: 500 }}>
+        <Table stickyHeader size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>ID</TableCell>
+              <TableCell>Name</TableCell>
+              <TableCell>Email</TableCell>
+              <TableCell>Role</TableCell>
+              <TableCell>Created At</TableCell>
+              <TableCell>Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {userTableLoading ? (
+              <TableRow>
+                <TableCell colSpan={6} align="center">
+                  <CircularProgress size={28} />
+                </TableCell>
+              </TableRow>
+            ) : (
+              [...students, ...teachers, ...admins].map((user) => (
+                <TableRow key={user.id}>
+                  <TableCell>{user.id}</TableCell>
+                  <TableCell>{user.fname || user.firstName} {user.lname || user.lastName}</TableCell>
+                  <TableCell>{user.email}</TableCell>
+                  <TableCell>
+                    <TextField
+                      select
+                      value={user.role}
+                      onChange={async (e) => {
+                        setUserTableLoading(true);
+                        await fetch('/api/update-user-role', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ id: user.id, role: e.target.value }),
+                        });
+                        await fetchCountsAndLists();
+                        setUserTableLoading(false);
+                      }}
+                      size="small"
+                      sx={{ minWidth: 100 }}
+                    >
+                      {userRoleOptions.map((option) => (
+                        <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                      ))}
+                    </TextField>
+                  </TableCell>
+                  <TableCell>
+                    {user.created_at ? (
+                      <span style={{ color: '#222', fontWeight: 500 }}>
+                        {new Date(user.created_at).toLocaleString('en-IN', {
+                          timeZone: 'Asia/Kolkata',
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true,
+                        })}
+                      </span>
+                    ) : '-'}
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      color="error"
+                      size="small"
+                      onClick={() => {
+                        setUserToDelete(user);
+                        setDeleteDialogOpen(true);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <TablePagination
+        component="div"
+        count={100} // Clerk's max per page, or replace with total user count if available
+        page={userPage}
+        onPageChange={(_, newPage) => setUserPage(newPage)}
+        rowsPerPage={userRowsPerPage}
+        onRowsPerPageChange={e => { setUserRowsPerPage(parseInt(e.target.value, 10)); setUserPage(0); }}
+      />
+    </Box>
+  );
 
   return (
     <Box sx={{ display: 'flex', fontFamily: 'Poppins, sans-serif' }}>
@@ -408,12 +523,7 @@ export default function AdminDashboardPage() {
             </Box>
           </Box>
         )}
-        {selectedTab === 'quizzes' && (
-          <Box>
-            <Typography variant="h6" fontWeight={700} mb={2}>Manage Quizzes</Typography>
-            <Typography>Quiz management coming soon.</Typography>
-          </Box>
-        )}
+        {selectedTab === 'manage-users' && renderUserManagementTable()}
         {selectedTab === 'results' && (
           <Box>
             <Typography variant="h6" fontWeight={700} mb={2}>Results Section</Typography>
@@ -452,11 +562,50 @@ export default function AdminDashboardPage() {
               <Button onClick={() => setLogoutDialogOpen(false)} variant="outlined" color="primary">
                 Cancel
               </Button>
-              <Button onClick={() => { setLogoutDialogOpen(false); signOut(); }} variant="contained" color="error" sx={{ ml: 2 }}>
+              <Button onClick={() => { setLogoutDialogOpen(false); signOut({ redirectUrl: "/sign-in" }); }} variant="contained" color="error" sx={{ ml: 2 }}>
                 Log Out
               </Button>
             </DialogActions>
           </Card>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+          <DialogTitle>Delete User</DialogTitle>
+          <DialogContent>
+            <Typography color="error" fontWeight={600} mb={2}>
+              Are you sure you want to delete this user? This action cannot be undone.
+            </Typography>
+            {userToDelete && (
+              <Typography variant="body2">
+                <strong>ID:</strong> {userToDelete.id}<br/>
+                <strong>Name:</strong> {userToDelete.fname || userToDelete.firstName} {userToDelete.lname || userToDelete.lastName}<br/>
+                <strong>Email:</strong> {userToDelete.email}
+              </Typography>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDeleteDialogOpen(false)} color="primary">
+              Cancel
+            </Button>
+            <Button
+              color="error"
+              onClick={async () => {
+                setUserTableLoading(true);
+                await fetch('/api/delete-user', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id: userToDelete.id }),
+                });
+                setDeleteDialogOpen(false);
+                setUserToDelete(null);
+                await fetchCountsAndLists();
+                setUserTableLoading(false);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogActions>
         </Dialog>
       </Box>
     </Box>

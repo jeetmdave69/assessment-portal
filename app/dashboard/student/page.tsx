@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Box,
   Button,
@@ -27,6 +27,12 @@ import {
   TableRow,
   Paper,
   Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import { useUser, useClerk } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
@@ -42,7 +48,13 @@ import {
   Settings as SettingsIcon,
   Help as HelpIcon,
   Logout as LogoutIcon,
+  WbSunny as WbSunnyIcon,
+  WbTwilight as WbTwilightIcon,
+  NightsStay as NightsStayIcon,
+  PlayArrow as PlayArrowIcon,
+  Replay as ReplayIcon,
 } from '@mui/icons-material';
+import SummaryCards from '../../../components/dashboard/SummaryCards';
 
 const formatDateTime = (d: Date) =>
   new Intl.DateTimeFormat('en-GB', {
@@ -94,14 +106,16 @@ export default function StudentDashboardPage() {
 
   // Settings/Profile form state
   const [profileForm, setProfileForm] = useState({
-    fullName: user?.fullName || '',
-    email: user?.emailAddresses?.[0]?.emailAddress || '',
+    full_name: '',
+    email: '',
     dob: '',
     gender: '',
+    profile_picture: '',
   });
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState('');
   const [profileError, setProfileError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Messages/Announcements state
   const [messages, setMessages] = useState<any[]>([]);
@@ -110,6 +124,10 @@ export default function StudentDashboardPage() {
   // Results state
   const [results, setResults] = useState<any[]>([]);
   const [resultsLoading, setResultsLoading] = useState(false);
+
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+
+  const [quizProgress, setQuizProgress] = useState<Record<number, boolean>>({});
 
   const now = new Date();
   const classify = (q: any): 'live' | 'upcoming' | 'completed' | 'expired' => {
@@ -134,16 +152,14 @@ export default function StudentDashboardPage() {
     const now = new Date();
     const hour = now.getHours();
     if (hour < 12) {
-      return { greet: 'Good Morning', img: '/assets/illustrations/mng.jpg' };
+      return { greet: 'Good Morning', icon: <WbSunnyIcon sx={{ fontSize: 60, color: '#fbc02d', background: '#fffde7', borderRadius: 2, p: 1 }} /> };
     } else if (hour >= 12 && hour < 17) {
-      return { greet: 'Good Afternoon', img: '/assets/illustrations/aftn.jpg' };
-    } else if (hour >= 17 && hour < 19) {
-      return { greet: 'Good Evening', img: '/assets/illustrations/evng.jpg' };
+      return { greet: 'Good Afternoon', icon: <WbTwilightIcon sx={{ fontSize: 60, color: '#ff9800', background: '#fff3e0', borderRadius: 2, p: 1 }} /> };
     } else {
-      return { greet: 'Good Evening', img: '/assets/illustrations/evng.jpg' };
+      return { greet: 'Good Evening', icon: <NightsStayIcon sx={{ fontSize: 60, color: '#37474f', background: '#eceff1', borderRadius: 2, p: 1 }} /> };
     }
   };
-  const { greet, img } = getGreeting();
+  const { greet, icon } = getGreeting();
 
   useEffect(() => {
     setMounted(true);
@@ -168,26 +184,32 @@ export default function StudentDashboardPage() {
 
   useEffect(() => {
     if (!user) return;
-    supabase.from('quizzes').select('id', { count: 'exact', head: true }).then(({ count }) => setExamsCount(count || 0));
     supabase.from('attempts').select('id', { count: 'exact', head: true }).eq('user_id', user.id).then(({ count }) => setAttemptsCount(count || 0));
     supabase.from('announcements').select('id', { count: 'exact', head: true }).eq('is_active', true).then(({ count }) => setAnnouncementsCount(count || 0));
   }, [user]);
 
-  // Fetch extra profile fields (dob, gender) from Supabase on mount
+  // Set examsCount to number of live quizzes
+  useEffect(() => {
+    setExamsCount(liveQuizzes.length);
+  }, [liveQuizzes]);
+
+  // Fetch profile from Supabase on mount or user change
   useEffect(() => {
     if (!user) return;
     const fetchProfile = async () => {
       const { data, error } = await supabase
         .from('student')
-        .select('dob, gender')
+        .select('full_name, email, dob, gender, profile_picture')
         .eq('id', user.id)
         .single();
       if (data) {
-        setProfileForm(f => ({
-          ...f,
+        setProfileForm({
+          full_name: data.full_name || '',
+          email: data.email || '',
           dob: data.dob || '',
           gender: data.gender || '',
-        }));
+          profile_picture: data.profile_picture || '',
+        });
       }
     };
     fetchProfile();
@@ -255,6 +277,54 @@ export default function StudentDashboardPage() {
       });
   }, [selectedSection, user]);
 
+  useEffect(() => {
+    if (!user) return;
+    // Create student row if not exists
+    const createStudentIfNotExists = async () => {
+      const { id, fullName, emailAddresses } = user;
+      const email = emailAddresses?.[0]?.emailAddress;
+      if (!id || !email) return;
+      const { data: existing } = await supabase
+        .from('student')
+        .select('id')
+        .eq('id', id)
+        .single();
+      if (!existing) {
+        await supabase.from('student').insert([
+          {
+            id,
+            full_name: fullName || '',
+            email,
+            // dob, gender, profile_picture can be null/empty at first
+          }
+        ]);
+      }
+    };
+    createStudentIfNotExists();
+  }, [user]);
+
+  // Fetch quiz progress for all live quizzes
+  useEffect(() => {
+    if (!user || !liveQuizzes.length) return;
+    let isMounted = true;
+    const fetchProgress = async () => {
+      const progressMap: Record<number, boolean> = {};
+      await Promise.all(liveQuizzes.map(async (q) => {
+        try {
+          const res = await fetch(`/api/quiz-progress?quiz_id=${q.id}&user_id=${user.id}`);
+          const { data } = await res.json();
+          // No need to parse, fields are already objects with jsonb columns
+          progressMap[q.id] = !!data;
+        } catch {
+          progressMap[q.id] = false;
+        }
+      }));
+      if (isMounted) setQuizProgress(progressMap);
+    };
+    fetchProgress();
+    return () => { isMounted = false; };
+  }, [user, liveQuizzes]);
+
   const fetchQuizzes = async () => {
     if (!user) return;
     setLoading(true);
@@ -294,8 +364,99 @@ export default function StudentDashboardPage() {
   };
 
   const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setProfileForm(f => ({ ...f, [name]: value }));
+    setProfileForm({ ...profileForm, [e.target.name]: e.target.value });
+  };
+
+  // Handle profile picture upload
+  const handleProfilePicChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !user) return;
+    const file = e.target.files[0];
+    if (!file) return;
+    setProfileLoading(true);
+    setProfileError('');
+    try {
+      const fileExt = file.name.split('.').pop();
+      const filePath = `${user.id}.${fileExt}`;
+      console.log('Uploading to bucket: profile-pictures, filePath:', filePath, 'user:', user);
+      const { error: uploadError, data: uploadData } = await supabase.storage.from('profile-pictures').upload(filePath, file, { upsert: true });
+      if (uploadError) {
+        console.error('Supabase upload error:', uploadError, JSON.stringify(uploadError, null, 2));
+        setProfileError('Failed to upload image: ' + (uploadError.message || JSON.stringify(uploadError)));
+        setProfileLoading(false);
+        return;
+      }
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage.from('profile-pictures').getPublicUrl(filePath);
+      console.log('getPublicUrl data:', publicUrlData);
+      const publicUrl = publicUrlData?.publicUrl;
+      if (publicUrl) {
+        setProfileForm((prev) => ({ ...prev, profile_picture: publicUrl }));
+        // Update in DB immediately
+        const { error: dbError } = await supabase.from('student').update({ profile_picture: publicUrl }).eq('id', user.id);
+        if (dbError) {
+          console.error('Supabase DB update error:', dbError);
+          setProfileError('Failed to update profile picture in database: ' + dbError.message);
+          setProfileLoading(false);
+          return;
+        }
+        // Update Clerk profile image via backend API
+        try {
+          await fetch('/api/update-clerk-profile-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.id, imageUrl: publicUrl }),
+          });
+        } catch (clerkErr) {
+          console.error('Failed to update Clerk profile image:', clerkErr);
+        }
+      }
+      setProfileLoading(false);
+    } catch (err: any) {
+      console.error('Unexpected error during upload:', err, JSON.stringify(err, null, 2));
+      setProfileError('Unexpected error: ' + (err.message || JSON.stringify(err)));
+      setProfileLoading(false);
+    }
+  };
+
+  // Handle delete profile picture
+  const handleDeleteProfilePic = async () => {
+    if (!user || !profileForm.profile_picture) return;
+    setProfileLoading(true);
+    setProfileError('');
+    try {
+      // Extract file name from URL
+      const urlParts = profileForm.profile_picture.split('/');
+      const fileName = urlParts[urlParts.length - 1].split('?')[0];
+      // Remove from storage
+      const { error: removeError } = await supabase.storage.from('profile-pictures').remove([fileName]);
+      if (removeError) {
+        setProfileError('Failed to delete image: ' + removeError.message);
+        setProfileLoading(false);
+        return;
+      }
+      // Set profile_picture to null in DB
+      const { error: dbError } = await supabase.from('student').update({ profile_picture: null }).eq('id', user.id);
+      if (dbError) {
+        setProfileError('Failed to update database: ' + dbError.message);
+        setProfileLoading(false);
+        return;
+      }
+      setProfileForm((prev) => ({ ...prev, profile_picture: '' }));
+      setProfileSuccess('Profile photo deleted.');
+      // Remove Clerk profile image via backend API
+      try {
+        await fetch('/api/update-clerk-profile-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id, imageUrl: null }),
+        });
+      } catch (clerkErr) {
+        console.error('Failed to remove Clerk profile image:', clerkErr);
+      }
+    } catch (err: any) {
+      setProfileError('Unexpected error: ' + (err.message || String(err)));
+    }
+    setProfileLoading(false);
   };
 
   const handleProfileSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -303,26 +464,30 @@ export default function StudentDashboardPage() {
     setProfileLoading(true);
     setProfileSuccess('');
     setProfileError('');
-    try {
-      if (!user) throw new Error('User not found');
-      // Update Supabase student table
-      const { error } = await supabase
-        .from('student')
-        .update({
-          fname: profileForm.fullName,
-          email: profileForm.email,
-          dob: profileForm.dob,
-          gender: profileForm.gender,
-        })
-        .eq('id', user.id);
-      if (error) throw error;
-      setProfileSuccess('Profile updated successfully! Kindly re-login to see the changes.');
-    } catch (err) {
+    if (!user) return;
+    const { full_name, email, dob, gender, profile_picture } = profileForm;
+    const { error } = await supabase.from('student').update({
+      full_name,
+      email,
+      dob,
+      gender,
+      profile_picture,
+    }).eq('id', user.id);
+    if (error) {
       setProfileError('Failed to update profile.');
-    } finally {
-      setProfileLoading(false);
+    } else {
+      setProfileSuccess('Profile updated successfully!');
     }
+    setProfileLoading(false);
   };
+
+  // Add this useEffect to auto-clear success messages
+  useEffect(() => {
+    if (profileSuccess) {
+      const timer = setTimeout(() => setProfileSuccess(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [profileSuccess]);
 
   if (!mounted || !user) return null;
 
@@ -333,7 +498,7 @@ export default function StudentDashboardPage() {
     { text: 'Messages', icon: <MessageIcon />, onClick: () => setSelectedSection('messages'), active: selectedSection === 'messages' },
     { text: 'Settings', icon: <SettingsIcon />, onClick: () => setSelectedSection('settings'), active: selectedSection === 'settings' },
     { text: 'Help', icon: <HelpIcon />, onClick: () => setSelectedSection('help'), active: selectedSection === 'help' },
-    { text: 'Log out', icon: <LogoutIcon />, onClick: () => signOut(), logout: true },
+    { text: 'Log out', icon: <LogoutIcon />, onClick: () => setLogoutDialogOpen(true), logout: true },
   ];
 
   const helpContent = (
@@ -364,14 +529,31 @@ export default function StudentDashboardPage() {
       <Typography variant="h5" align="center" gutterBottom sx={{ color: '#002366', fontWeight: 700, fontFamily: 'Poppins, sans-serif' }}>
         My Profile
       </Typography>
-      <Box display="flex" justifyContent="center" mb={2}>
-        <Avatar src={user.imageUrl} alt="pro" sx={{ width: 80, height: 80, border: '2px solid #e3e6ef' }} />
+      <Box display="flex" flexDirection="column" alignItems="center" mb={2}>
+        <Avatar src={profileForm.profile_picture || user.imageUrl} alt="pro" sx={{ width: 80, height: 80, border: '2px solid #e3e6ef', mb: 1 }} />
+        <Box display="flex" gap={1}>
+          <Button variant="outlined" size="small" onClick={() => fileInputRef.current?.click()} disabled={profileLoading}>
+            {profileLoading ? 'Uploading...' : 'Change Photo'}
+          </Button>
+          {profileForm.profile_picture && (
+            <Button variant="outlined" size="small" color="error" onClick={handleDeleteProfilePic} disabled={profileLoading}>
+              Delete Photo
+            </Button>
+          )}
+        </Box>
+        <input
+          type="file"
+          accept="image/*"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          onChange={handleProfilePicChange}
+        />
       </Box>
       <form onSubmit={handleProfileSubmit}>
         <TextField
           label="Full Name"
-          name="fullName"
-          value={profileForm.fullName}
+          name="full_name"
+          value={profileForm.full_name}
           onChange={handleProfileChange}
           fullWidth
           margin="normal"
@@ -417,9 +599,29 @@ export default function StudentDashboardPage() {
         >
           {profileLoading ? 'Updating…' : 'Update'}
         </Button>
-        {profileSuccess && <Typography color="success.main" align="center" mt={2}>{profileSuccess}</Typography>}
-        {profileError && <Typography color="error.main" align="center" mt={2}>{profileError}</Typography>}
       </form>
+      {/* Snackbar for success */}
+      <Snackbar
+        open={!!profileSuccess}
+        autoHideDuration={3000}
+        onClose={() => setProfileSuccess('')}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setProfileSuccess('')} severity="success" sx={{ width: '100%' }}>
+          {profileSuccess}
+        </Alert>
+      </Snackbar>
+      {/* Snackbar for error */}
+      <Snackbar
+        open={!!profileError}
+        autoHideDuration={4000}
+        onClose={() => setProfileError('')}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setProfileError('')} severity="error" sx={{ width: '100%' }}>
+          {profileError}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 
@@ -654,7 +856,7 @@ export default function StudentDashboardPage() {
         >
           <Typography variant="h5" fontWeight={700} letterSpacing={0.5} sx={{ color: '#002366', fontFamily: 'Poppins, sans-serif' }}>Student Dashboard</Typography>
           <Box display="flex" alignItems="center">
-            <Avatar src={user.imageUrl} alt="pro" sx={{ mr: 2, border: '2px solid #e3e6ef', width: 44, height: 44 }} />
+            <Avatar src={profileForm.profile_picture || user.imageUrl} alt="pro" sx={{ mr: 2, border: '2px solid #e3e6ef', width: 44, height: 44 }} />
             <Typography variant="subtitle1" fontWeight={600} sx={{ color: '#002366', fontFamily: 'Poppins, sans-serif' }}>{user.firstName}</Typography>
           </Box>
         </Box>
@@ -664,33 +866,39 @@ export default function StudentDashboardPage() {
           <>
             {/* Greeting */}
             <Box display="flex" alignItems="center" gap={2} mb={3}>
-              <img src={img} alt={greet} style={{ width: 60, height: 60, borderRadius: 8 }} />
+              {icon}
               <Typography variant="h5" fontWeight={700} color="#002366">
                 {greet}, {user?.firstName || user?.fullName || 'Student'}!
               </Typography>
             </Box>
             {/* Overview Boxes */}
-            <Grid container spacing={3} mb={4}>
+            <Grid container spacing={3} mb={4} alignItems="stretch">
               <Grid item xs={12} sm={4}>
-                <Box p={3} borderRadius={3} boxShadow={2} sx={{ ...boxStyles[0], minHeight: 110, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                  <Typography variant="subtitle1" fontWeight={600} sx={{ color: '#002366', fontSize: 18 }}>Exams</Typography>
-                  <Typography variant="h3" fontWeight={800} sx={{ color: '#002366', fontSize: 36 }}>{examsCount}</Typography>
-                  <Typography sx={{ opacity: 0.8, color: '#555', fontSize: 15 }}>Total number of exams</Typography>
-                </Box>
+                <SummaryCards
+                  title="Exams"
+                  total={examsCount}
+                  color="#002366"
+                  countColor="#002366"
+                />
+                <Typography sx={{ opacity: 0.8, color: '#555', fontSize: 15, textAlign: 'center', mt: 1 }}>Active exams</Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
-                <Box p={3} borderRadius={3} boxShadow={2} sx={{ ...boxStyles[1], minHeight: 110, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                  <Typography variant="subtitle1" fontWeight={600} sx={{ color: '#1565c0', fontSize: 18 }}>Attempts</Typography>
-                  <Typography variant="h3" fontWeight={800} sx={{ color: '#1565c0', fontSize: 36 }}>{attemptsCount}</Typography>
-                  <Typography sx={{ opacity: 0.8, color: '#555', fontSize: 15 }}>Total number of attempted exams</Typography>
-                </Box>
+                <SummaryCards
+                  title="Upcoming Exams"
+                  total={upcomingQuizzes.length}
+                  color="#000"
+                  countColor="#000"
+                />
+                <Typography sx={{ opacity: 0.8, color: '#555', fontSize: 15, textAlign: 'center', mt: 1 }}>Exams scheduled for the future</Typography>
               </Grid>
               <Grid item xs={12} sm={4}>
-                <Box p={3} borderRadius={3} boxShadow={2} sx={{ ...boxStyles[2], minHeight: 110, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                  <Typography variant="subtitle1" fontWeight={600} sx={{ color: '#37474f', fontSize: 18 }}>Announcements</Typography>
-                  <Typography variant="h3" fontWeight={800} sx={{ color: '#37474f', fontSize: 36 }}>{announcementsCount}</Typography>
-                  <Typography sx={{ opacity: 0.8, color: '#555', fontSize: 15 }}>Total number of messages received</Typography>
-                </Box>
+                <SummaryCards
+                  title="Announcements"
+                  total={announcementsCount}
+                  color="#000"
+                  countColor="#000"
+                />
+                <Typography sx={{ opacity: 0.8, color: '#555', fontSize: 15, textAlign: 'center', mt: 1 }}>Total number of messages received</Typography>
               </Grid>
             </Grid>
 
@@ -710,6 +918,24 @@ export default function StudentDashboardPage() {
 
         {selectedSection === 'exams' && (
           <>
+            {/* Access Quiz by Code - moved to top */}
+            <Box mb={6} p={4} borderRadius={3} bgcolor="#fff" boxShadow={1} border="none" sx={{ fontFamily: 'Poppins, sans-serif' }}>
+              <Typography variant="h6" gutterBottom sx={{ color: '#002366', fontWeight: 700 }}>Access Quiz by Code</Typography>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <TextField
+                  label="Access Code"
+                  fullWidth
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value)}
+                  error={!!codeError}
+                  helperText={codeError}
+                  sx={{ fontFamily: 'Poppins, sans-serif' }}
+                />
+                <Button variant="contained" disabled={codeLoading} onClick={handleAccessCodeSubmit} sx={{ minWidth: 160, background: '#002366', color: '#fff', borderRadius: 2, fontWeight: 600, fontFamily: 'Poppins, sans-serif', '&:hover': { background: '#001b4e' } }}>
+                  {codeLoading ? 'Checking…' : 'Begin'}
+                </Button>
+              </Stack>
+            </Box>
             {/* Exam Section (Quizzes List) */}
             {loading ? (
               <Box py={6} display="flex" justifyContent="center">
@@ -728,6 +954,7 @@ export default function StudentDashboardPage() {
                             quiz={q}
                             status="live"
                             attempts={userAttempts[q.id] || 0}
+                            hasProgress={quizProgress[q.id]}
                             onStart={() => router.push(`/attempt-quiz/${q.id}`)}
                           />
                         ))}
@@ -780,25 +1007,6 @@ export default function StudentDashboardPage() {
                     </>
                   )}
                 </Box>
-
-                {/* Access Quiz by Code */}
-                <Box mb={6} p={4} borderRadius={3} bgcolor="#fff" boxShadow={1} border="none" sx={{ fontFamily: 'Poppins, sans-serif' }}>
-                  <Typography variant="h6" gutterBottom sx={{ color: '#002366', fontWeight: 700 }}>Access Quiz by Code</Typography>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                    <TextField
-                      label="Access Code"
-                      fullWidth
-                      value={accessCode}
-                      onChange={(e) => setAccessCode(e.target.value)}
-                      error={!!codeError}
-                      helperText={codeError}
-                      sx={{ fontFamily: 'Poppins, sans-serif' }}
-                    />
-                    <Button variant="contained" disabled={codeLoading} onClick={handleAccessCodeSubmit} sx={{ minWidth: 160, background: '#002366', color: '#fff', borderRadius: 2, fontWeight: 600, fontFamily: 'Poppins, sans-serif', '&:hover': { background: '#001b4e' } }}>
-                      {codeLoading ? 'Checking…' : 'Begin'}
-                    </Button>
-                  </Stack>
-                </Box>
               </>
             )}
           </>
@@ -816,6 +1024,36 @@ export default function StudentDashboardPage() {
         {/* Results Section */}
         {selectedSection === 'results' && resultsContent}
       </Box>
+
+      {/* Logout Confirmation Dialog */}
+      <Dialog open={logoutDialogOpen} onClose={() => setLogoutDialogOpen(false)}>
+        <DialogTitle sx={{ color: '#002366', fontWeight: 700 }}>
+          Log Out
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Are you sure you want to log out?
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            You will need to sign in again to access your dashboard.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLogoutDialogOpen(false)} color="primary">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              setLogoutDialogOpen(false);
+              signOut({ redirectUrl: "/sign-in" });
+            }}
+            color="error"
+            variant="contained"
+          >
+            Yes, Log me out
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
@@ -824,11 +1062,13 @@ function QuizCard({
   quiz,
   status,
   attempts,
+  hasProgress = false,
   onStart,
 }: {
   quiz: any;
   status: 'live' | 'upcoming' | 'completed' | 'expired';
   attempts: number;
+  hasProgress?: boolean;
   onStart: () => void;
 }) {
   const start = new Date(quiz.start_time);
@@ -874,8 +1114,9 @@ function QuizCard({
           disabled={map.disabled}
           onClick={onStart}
           sx={{ mt: 3, textTransform: 'none', fontWeight: 600, borderRadius: 2, background: '#002366', color: '#fff', fontFamily: 'Poppins, sans-serif', '&:hover': { background: '#001b4e' } }}
+          startIcon={status === 'live' && hasProgress ? <ReplayIcon /> : <PlayArrowIcon />}
         >
-          {status === 'live' ? 'Start Quiz' : map.badge}
+          {status === 'live' ? (hasProgress ? 'Resume Quiz' : 'Start Quiz') : map.badge}
         </Button>
       </Box>
     </Grid>

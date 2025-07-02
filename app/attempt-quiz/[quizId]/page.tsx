@@ -69,9 +69,11 @@ import {
   Palette as PaletteIcon,
   TextFields as TextFieldsIcon,
   ExpandMore as ExpandMoreIcon,
-  ChevronRight as ChevronRightIcon
+  ChevronRight as ChevronRightIcon,
+  WifiOff as WifiOffIcon
 } from '@mui/icons-material'
 import debounce from 'lodash.debounce'
+import { throttle } from 'lodash'
 
 // Types
 interface Option {
@@ -245,7 +247,7 @@ export default function AttemptQuizPage() {
   // State management
   const [quiz, setQuiz] = useState<Quiz | null>(null)
   const [questions, setQuestions] = useState<Question[]>([])
-  const [answers, setAnswers] = useState<Record<number, string[]>>({})
+  const [answers, setAnswers] = useState<Record<number, number[]>>({})
   const [flagged, setFlagged] = useState<Record<number, boolean>>({})
   const [bookmarked, setBookmarked] = useState<Record<number, boolean>>({})
   const [markedForReview, setMarkedForReview] = useState<Record<number, boolean>>({})
@@ -274,7 +276,12 @@ export default function AttemptQuizPage() {
   const [redirectMessage, setRedirectMessage] = useState<string | null>(null)
   const [violationCount, setViolationCount] = useState(0)
   const [submittingModalOpen, setSubmittingModalOpen] = useState(false)
-  const [resumeNotification, setResumeNotification] = useState(false)
+  const [isOffline, setIsOffline] = useState(typeof window !== 'undefined' ? !navigator.onLine : false)
+  const [pauseStart, setPauseStart] = useState<number | null>(null)
+  const [pausedDuration, setPausedDuration] = useState<number>(0)
+  const [showLastMinuteWarning, setShowLastMinuteWarning] = useState(false)
+  const [restoredNotification, setRestoredNotification] = useState(false)
+  const [showSubmitThankYou, setShowSubmitThankYou] = useState(false)
 
   // Refs
   const questionRefs = useRef<Record<number, HTMLDivElement | null>>({})
@@ -364,15 +371,22 @@ export default function AttemptQuizPage() {
         const savedState = localStorage.getItem(`quiz-${quizId}-state`)
         if (savedState) {
           const { answers, flags, bookmarks, reviews } = JSON.parse(savedState)
-          setAnswers(answers || {})
-          setFlagged(flags || {})
-          setBookmarked(bookmarks || {})
-          setMarkedForReview(reviews || {})
+          // Ensure all indices are numbers
+          const fixedAnswers: Record<number, number[]> = {};
+          for (const [qid, arr] of Object.entries(answers || {})) {
+            fixedAnswers[Number(qid)] = Array.isArray(arr) ? arr.map(Number) : [];
+          }
+          setAnswers(fixedAnswers);
+          setFlagged(typeof flags === 'string' ? JSON.parse(flags) : (flags || {}))
+          setBookmarked(typeof bookmarks === 'string' ? JSON.parse(bookmarks) : (bookmarks || {}))
+          setMarkedForReview(typeof reviews === 'string' ? JSON.parse(reviews) : (reviews || {}))
         }
 
         if ((sectionData || []).length > 0) {
           setCurrentSection(sectionData[0].id)
         }
+
+        setRestoredNotification(true);
       } catch (error) {
         console.error('Error loading quiz:', error, JSON.stringify(error, null, 2));
         setErrorPopup('Failed to load quiz. Please try again.');
@@ -470,20 +484,35 @@ export default function AttemptQuizPage() {
   };
 
   // Answer handlers
-  const handleOptionSelect = (questionId: number, optionText: string, questionType: string) => {
+  const handleOptionSelect = (questionId: number, optionIdx: number, questionType: string) => {
     setAnswers(prev => {
+      let newAnswers;
       if (questionType === 'single') {
-        return { ...prev, [questionId]: [optionText] }
+        newAnswers = { ...prev, [questionId]: [optionIdx] };
       } else {
-        const currentAnswers = prev[questionId] || []
-        return {
+        const currentAnswers = prev[questionId] || [];
+        newAnswers = {
           ...prev,
-          [questionId]: currentAnswers.includes(optionText)
-            ? currentAnswers.filter(a => a !== optionText)
-            : [...currentAnswers, optionText]
-        }
+          [questionId]: currentAnswers.includes(optionIdx)
+            ? currentAnswers.filter(a => a !== optionIdx)
+            : [...currentAnswers, optionIdx]
+        };
       }
-    })
+      // Persist this change immediately
+      if (user?.id && quizId) {
+        fetch('/api/quiz-progress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            quiz_id: quizId,
+            user_id: user.id,
+            question_id: questionId,
+            answers: { [questionId]: newAnswers[questionId] },
+          })
+        });
+      }
+      return newAnswers;
+    });
   }
 
   // Flag and bookmark handlers
@@ -575,16 +604,36 @@ export default function AttemptQuizPage() {
     };
   }, []);
 
-  // Restore progress from server on mount
+  // Add debug logs for answers, questions, and current question
   useEffect(() => {
-    if (!quizId || !user?.id) return;
+    console.log('Restored answers state:', answers);
+  }, [answers]);
+
+  useEffect(() => {
+    console.log('Questions loaded:', questions);
+  }, [questions]);
+
+  useEffect(() => {
+    if (currentQuestion) {
+      console.log('Current question:', currentQuestion.id, currentQuestion.question_text);
+      console.log('Selected indices:', answers[currentQuestion.id]);
+    }
+  }, [currentQuestion, answers]);
+
+  // Restore progress from server on mount, but only after questions are loaded
+  useEffect(() => {
+    if (!quizId || !user?.id || questions.length === 0) return;
     (async () => {
       try {
         const res = await fetch(`/api/quiz-progress?quiz_id=${quizId}&user_id=${user.id}`);
         const { data } = await res.json();
         if (data) {
-          // Restore server progress
-          setAnswers(data.answers || {});
+          // Ensure all indices are numbers
+          const fixedAnswers: Record<number, number[]> = {};
+          for (const [qid, arr] of Object.entries(data.answers || {})) {
+            fixedAnswers[Number(qid)] = Array.isArray(arr) ? arr.map(Number) : [];
+          }
+          setAnswers(fixedAnswers);
           setFlagged(data.flagged || {});
           setBookmarked(data.bookmarked || {});
           setMarkedForReview(data.marked_for_review || {});
@@ -592,7 +641,7 @@ export default function AttemptQuizPage() {
             localStorage.setItem(`quiz-${quizId}-startTime`, new Date(data.start_time).getTime().toString());
           }
           // Set current question to first answered or first question
-          const answeredQ = Object.keys(data.answers || {});
+          const answeredQ = Object.keys(fixedAnswers);
           if (answeredQ.length > 0) {
             const firstQ = questions.find(q => q.id === Number(answeredQ[0]));
             if (firstQ) {
@@ -600,10 +649,35 @@ export default function AttemptQuizPage() {
               setCurrentSection(firstQ.section_id);
             }
           }
-          setResumeNotification(true);
         }
       } catch (e) {
         // Ignore fetch errors
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizId, user?.id, questions]);
+
+  // After quiz and user are loaded, ensure a progress row is created in quiz_progress as soon as the quiz attempt page loads.
+  useEffect(() => {
+    if (!quizId || !user?.id) return;
+    // Only run once on mount
+    (async () => {
+      try {
+        await fetch('/api/quiz-progress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            quiz_id: quizId,
+            user_id: user.id,
+            answers: answers || {},
+            flagged: flagged || {},
+            bookmarked: bookmarked || {},
+            marked_for_review: markedForReview || {},
+            start_time: localStorage.getItem(`quiz-${quizId}-startTime`) ? new Date(Number(localStorage.getItem(`quiz-${quizId}-startTime`))).toISOString() : undefined,
+          })
+        });
+      } catch (e) {
+        // Ignore errors
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -635,6 +709,61 @@ export default function AttemptQuizPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answers, flagged, bookmarked, markedForReview, currentQuestionId]);
 
+  // Throttled saveProgress function (at most once every 2 seconds)
+  const throttledSaveProgress = useCallback(
+    throttle(() => {
+      if (!quizId || !user?.id) return;
+      const payload = {
+        quiz_id: quizId,
+        user_id: user.id,
+        answers: answers || {},
+        flagged: flagged || {},
+        bookmarked: bookmarked || {},
+        marked_for_review: markedForReview || {},
+        start_time: localStorage.getItem(`quiz-${quizId}-startTime`) ? new Date(Number(localStorage.getItem(`quiz-${quizId}-startTime`))).toISOString() : undefined,
+      };
+      console.log('Saving quiz progress:', payload);
+      fetch('/api/quiz-progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }, 2000),
+    [quizId, user?.id, answers, flagged, bookmarked, markedForReview]
+  );
+
+  // Save progress (throttled) on any change
+  useEffect(() => {
+    throttledSaveProgress();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, flagged, bookmarked, markedForReview]);
+
+  // Save progress on page unload (immediate, not throttled)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!quizId || !user?.id) return;
+      const payload = {
+        quiz_id: quizId,
+        user_id: user.id,
+        answers: answers || {},
+        flagged: flagged || {},
+        bookmarked: bookmarked || {},
+        marked_for_review: markedForReview || {},
+        start_time: localStorage.getItem(`quiz-${quizId}-startTime`) ? new Date(Number(localStorage.getItem(`quiz-${quizId}-startTime`))).toISOString() : undefined,
+      };
+      console.log('Saving quiz progress (unload):', payload);
+      fetch('/api/quiz-progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [quizId, user?.id, answers, flagged, bookmarked, markedForReview]);
+
   // Backend validation: On submission, check time and attempt count
   const confirmSubmit = async () => {
     setConfirmDialogOpen(false)
@@ -646,10 +775,20 @@ export default function AttemptQuizPage() {
       questions.forEach(q => {
         correctAnswers[q.id] = q.options.filter(o => o.isCorrect).map(o => o.text)
       })
+      // Convert answers from indices to text for submission
+      const answersText: Record<number, string[]> = {}
+      Object.entries(answers).forEach(([qid, arr]) => {
+        const q = questions.find(qq => qq.id === Number(qid));
+        if (q) {
+          answersText[q.id] = (arr as number[]).map(idx => q.options[idx]?.text ?? '');
+        }
+      });
       // Calculate extra fields
       const totalQuestions = questions.length;
       const scoreObj = calculateScore();
       const correctCount = scoreObj.score;
+      const obtainedMarks = scoreObj.obtainedMarks;
+      const totalMarks = scoreObj.totalMarks;
       const percentage = scoreObj.percentage;
       const status = 1;
       // Backend validation: Check time and attempt count
@@ -684,11 +823,12 @@ export default function AttemptQuizPage() {
         quiz_id: Number(quizId),
         user_id: user?.id,
         user_name: user?.fullName || 'Anonymous',
-        answers,
+        answers: answersText,
         correct_answers: correctAnswers,
         submitted_at: new Date().toISOString(),
-        score: correctCount,
+        score: obtainedMarks,
         total_questions: totalQuestions,
+        total_marks: totalMarks,
         correct_count: correctCount,
         percentage,
         status,
@@ -706,6 +846,7 @@ export default function AttemptQuizPage() {
         body: JSON.stringify({ quiz_id: quizId, user_id: user?.id })
       });
       setRedirectMessage('Quiz submitted! Redirecting to dashboard...')
+      setShowSubmitThankYou(true)
       setTimeout(() => {
         setSubmittingModalOpen(false)
         router.push('/dashboard/student')
@@ -724,18 +865,20 @@ export default function AttemptQuizPage() {
     let obtainedMarks = 0
 
     questions.forEach(q => {
-      const userAnswer = answers[q.id] || []
-      const correctAnswers = q.options.filter(o => o.isCorrect).map(o => o.text)
-      const questionMarks = q.marks || 1
-      totalMarks += questionMarks
+      const userAnswer: number[] = answers[q.id] || [];
+      const correctIndices = q.options
+        .map((o, idx) => (o.isCorrect ? idx : -1))
+        .filter(idx => idx !== -1);
+      const questionMarks = q.marks || 1;
+      totalMarks += questionMarks;
 
-      // Check if answer is correct
+      // Check if answer is correct (indices match)
       if (
-        userAnswer.length === correctAnswers.length &&
-        userAnswer.every(a => correctAnswers.includes(a))
+        userAnswer.length === correctIndices.length &&
+        userAnswer.every(a => correctIndices.includes(a))
       ) {
-        score += 1
-        obtainedMarks += questionMarks
+        score += 1;
+        obtainedMarks += questionMarks;
       }
     })
 
@@ -745,24 +888,100 @@ export default function AttemptQuizPage() {
     return { score, totalMarks, obtainedMarks, percentage, passed }
   }
 
-  // Timer countdown effect
+  // Handle online/offline events for timer pause/resume
+  useEffect(() => {
+    function handleOffline() {
+      setIsOffline(true);
+      setPauseStart(Date.now());
+      localStorage.setItem(`quiz-${quizId}-paused`, 'true');
+      localStorage.setItem(`quiz-${quizId}-pauseStart`, Date.now().toString());
+    }
+    function handleOnline() {
+      setIsOffline(false);
+      const pauseStartStr = localStorage.getItem(`quiz-${quizId}-pauseStart`);
+      if (pauseStartStr) {
+        const pauseStartTime = parseInt(pauseStartStr, 10);
+        const pauseDuration = Date.now() - pauseStartTime;
+        setPausedDuration((prev) => prev + pauseDuration);
+        localStorage.setItem(`quiz-${quizId}-pausedDuration`, ((parseInt(localStorage.getItem(`quiz-${quizId}-pausedDuration`) || '0', 10)) + pauseDuration).toString());
+      }
+      setPauseStart(null);
+      localStorage.removeItem(`quiz-${quizId}-paused`);
+      localStorage.removeItem(`quiz-${quizId}-pauseStart`);
+    }
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    // On mount, restore pause state
+    if (typeof window !== 'undefined') {
+      const paused = localStorage.getItem(`quiz-${quizId}-paused`) === 'true';
+      const pauseStartStr = localStorage.getItem(`quiz-${quizId}-pauseStart`);
+      const pausedDurStr = localStorage.getItem(`quiz-${quizId}-pausedDuration`);
+      if (paused) setIsOffline(true);
+      if (pauseStartStr) setPauseStart(parseInt(pauseStartStr, 10));
+      if (pausedDurStr) setPausedDuration(parseInt(pausedDurStr, 10));
+    }
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [quizId]);
+
+  // Timer countdown effect (modified for pause)
   useEffect(() => {
     if (submitted || timeLeft === null) return;
+    if (isOffline) return; // Pause timer if offline
     if (timeLeft <= 0) {
-      handleSubmit();
+      confirmSubmit(); // Force submit when timer goes off
       return;
     }
+    if (timeLeft <= 60 && !showLastMinuteWarning) {
+      setShowLastMinuteWarning(true);
+    }
     const timer = setInterval(() => {
-      // Always recalculate timeLeft from startTime for robustness
-      const startTime = localStorage.getItem(`quiz-${quizId}-startTime`)
+      const startTime = localStorage.getItem(`quiz-${quizId}-startTime`);
+      const pausedDurStr = localStorage.getItem(`quiz-${quizId}-pausedDuration`);
+      const pausedDur = pausedDurStr ? parseInt(pausedDurStr, 10) : pausedDuration;
       if (startTime) {
-        const elapsed = Math.floor((Date.now() - parseInt(startTime, 10)) / 1000)
-        const remaining = totalTime - elapsed
-        setTimeLeft(remaining > 0 ? remaining : 0)
+        const elapsed = Math.floor((Date.now() - parseInt(startTime, 10) - pausedDur) / 1000);
+        const remaining = totalTime - elapsed;
+        setTimeLeft(remaining > 0 ? remaining : 0);
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [timeLeft, submitted, quizId, totalTime]);
+  }, [timeLeft, submitted, quizId, totalTime, isOffline, pausedDuration, showLastMinuteWarning]);
+
+  // Add a useEffect to always sync isOffline with navigator.onLine on mount and on online/offline events.
+  useEffect(() => {
+    function syncOnlineStatus() {
+      setIsOffline(!navigator.onLine);
+    }
+    window.addEventListener('online', syncOnlineStatus);
+    window.addEventListener('offline', syncOnlineStatus);
+    // Initial check
+    syncOnlineStatus();
+    return () => {
+      window.removeEventListener('online', syncOnlineStatus);
+      window.removeEventListener('offline', syncOnlineStatus);
+    };
+  }, []);
+
+  // Set current question to first answered or first question after questions and answers are loaded
+  useEffect(() => {
+    if (questions.length === 0) return;
+    // If currentQuestionId is not set or not in questions, set it
+    const validIds = questions.map(q => q.id);
+    if (!validIds.includes(currentQuestionId)) {
+      // Prefer first answered question
+      const answeredQ = Object.keys(answers).map(Number);
+      if (answeredQ.length > 0 && validIds.includes(answeredQ[0])) {
+        setCurrentQuestionId(answeredQ[0]);
+        setCurrentSection(questions.find(q => q.id === answeredQ[0])?.section_id ?? questions[0].section_id);
+      } else {
+        setCurrentQuestionId(questions[0].id);
+        setCurrentSection(questions[0].section_id);
+      }
+    }
+  }, [questions, answers]);
 
   if (loading) {
     return (
@@ -785,6 +1004,32 @@ export default function AttemptQuizPage() {
       MozUserSelect: 'none',
       msUserSelect: 'none',
     }}>
+      {/* Offline Overlay */}
+      {isOffline && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            bgcolor: 'rgba(0,0,0,0.7)',
+            zIndex: 2000,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <WifiOffIcon sx={{ fontSize: 80, color: '#fff', mb: 2 }} />
+          <Typography variant="h4" color="#fff" fontWeight={700} mb={2}>
+            You are offline
+          </Typography>
+          <Typography variant="h6" color="#fff" mb={2}>
+            The timer is paused. Please check your internet connection.<br />You cannot answer questions until you are back online.
+          </Typography>
+        </Box>
+      )}
       {/* Header */}
       <Box sx={{
         backgroundColor: currentTheme.primary,
@@ -889,6 +1134,10 @@ export default function AttemptQuizPage() {
                 const sectionAnswered = sectionQuestionsList.filter((q: Question) => answers[q.id]).length
                 const sectionFlagged = sectionQuestionsList.filter((q: Question) => flagged[q.id]).length
 
+                const sectionMarks = typeof section.marks === 'number'
+                  ? section.marks
+                  : sectionQuestionsList.reduce((sum, q) => sum + (typeof q.marks === 'number' ? q.marks : 1), 0);
+
                 return (
                   <Box key={section.id} sx={{ mb: 1 }}>
                     <ListItem 
@@ -943,7 +1192,7 @@ export default function AttemptQuizPage() {
                             </Box>
                           </Box>
                         }
-                        secondary={`${sectionQuestionsList.length} Questions | ${section.marks || '?'} Marks`}
+                        secondary={`${sectionQuestionsList.length} Questions | ${sectionMarks} Marks`}
                       />
                     </ListItem>
 
@@ -956,20 +1205,23 @@ export default function AttemptQuizPage() {
                         flexWrap: 'wrap',
                         gap: 0.5
                       }}>
-                        {sectionQuestionsList.map((q: Question, idx: number) => (
-                          <QuestionButton
-                            key={q.id}
-                            q={q}
-                            idx={idx}
-                            isCurrent={currentQuestionId === q.id}
-                            isAnswered={!!answers[q.id]}
-                            isFlagged={!!flagged[q.id]}
-                            isBookmarked={!!bookmarked[q.id]}
-                            isMarkedForReview={!!markedForReview[q.id]}
-                            onClick={() => goToQuestion(q.id)}
-                            disabled={submitted}
-                          />
-                        ))}
+                        {sectionQuestionsList.map((q: Question, idx: number) => {
+                          return (
+                            <Box key={q.id} display="flex" alignItems="center" gap={1}>
+                              <QuestionButton
+                                q={q}
+                                idx={idx}
+                                isCurrent={currentQuestionId === q.id}
+                                isAnswered={!!answers[q.id]}
+                                isFlagged={!!flagged[q.id]}
+                                isBookmarked={!!bookmarked[q.id]}
+                                isMarkedForReview={!!markedForReview[q.id]}
+                                onClick={() => goToQuestion(q.id)}
+                                disabled={submitted}
+                              />
+                            </Box>
+                          );
+                        })}
                       </Box>
                     </Collapse>
                   </Box>
@@ -1096,20 +1348,6 @@ export default function AttemptQuizPage() {
                     </Typography>
                   </Box>
                 )}
-                <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
-                  <Chip 
-                    label={`${questionsBySection[section.id]?.length || 0} Questions`}
-                    sx={{ backgroundColor: '#ffffff30', color: '#fff' }}
-                  />
-                  <Chip 
-                    label={`${section.marks || '?'} Marks`}
-                    sx={{ backgroundColor: '#ffffff30', color: '#fff' }}
-                  />
-                  <Chip 
-                    label={`${Math.floor((section.marks || 0) / (quiz?.duration || 1))} Min/Question`}
-                    sx={{ backgroundColor: '#ffffff30', color: '#fff' }}
-                  />
-                </Box>
               </CardContent>
             </Card>
           ))}
@@ -1220,20 +1458,20 @@ export default function AttemptQuizPage() {
               {/* Question options */}
               {currentQuestion.question_type === 'single' ? (
                 <RadioGroup
-                  value={answers[currentQuestion.id]?.[0] || ''}
-                  onChange={(e) => handleOptionSelect(currentQuestion.id, e.target.value, currentQuestion.question_type)}
+                  value={typeof answers[currentQuestion.id]?.[0] === 'number' ? answers[currentQuestion.id]?.[0] : ''}
+                  onChange={(e) => handleOptionSelect(currentQuestion.id, Number(e.target.value), currentQuestion.question_type)}
                 >
                   {currentQuestion.options.map((opt: Option, optIdx: number) => (
                     <FormControlLabel
                       key={optIdx}
-                      value={opt.text}
+                      value={optIdx}
                       control={<Radio color="primary" />}
                       label={opt.text}
                       sx={{
                         mb: 1,
                         p: 1,
                         borderRadius: 1,
-                        backgroundColor: answers[currentQuestion.id]?.includes(opt.text) 
+                        backgroundColor: answers[currentQuestion.id]?.includes(optIdx) 
                           ? `${currentTheme.primary}20` 
                           : 'transparent',
                         '&:hover': {
@@ -1251,8 +1489,8 @@ export default function AttemptQuizPage() {
                       key={optIdx}
                       control={
                         <Checkbox
-                          checked={answers[currentQuestion.id]?.includes(opt.text) || false}
-                          onChange={() => handleOptionSelect(currentQuestion.id, opt.text, currentQuestion.question_type)}
+                          checked={answers[currentQuestion.id]?.includes(optIdx) || false}
+                          onChange={() => handleOptionSelect(currentQuestion.id, optIdx, currentQuestion.question_type)}
                           color="primary"
                         />
                       }
@@ -1261,7 +1499,7 @@ export default function AttemptQuizPage() {
                         mb: 1,
                         p: 1,
                         borderRadius: 1,
-                        backgroundColor: answers[currentQuestion.id]?.includes(opt.text) 
+                        backgroundColor: answers[currentQuestion.id]?.includes(optIdx) 
                           ? `${currentTheme.primary}20` 
                           : 'transparent',
                         '&:hover': {
@@ -1282,7 +1520,7 @@ export default function AttemptQuizPage() {
                 fontStyle: 'italic',
                 fontWeight: 'bold'
               }}>
-                Marks: {currentQuestion.marks || 1}
+                Marks: {typeof currentQuestion.marks === 'number' ? currentQuestion.marks : 1}
               </Typography>
 
               {/* Explanation (visible in review mode or if showAnswerKey is true) */}
@@ -1478,10 +1716,20 @@ export default function AttemptQuizPage() {
               <Chip label={`Answered: ${answeredCount}`} color="success" variant="outlined" />
               <Chip label={`Unanswered: ${questions.length - answeredCount}`} color="warning" variant="outlined" />
               <Chip label={`Flagged: ${Object.values(flagged).filter(Boolean).length}`} color="error" variant="outlined" />
+              <Chip label={`Marked for Review: ${Object.values(markedForReview).filter(Boolean).length}`} color="info" variant="outlined" />
             </Box>
+            {redirectMessage && (
+              <Alert severity="success" sx={{ mt: 3 }}>{redirectMessage}</Alert>
+            )}
           </Box>
-          {redirectMessage && (
-            <Alert severity="success" sx={{ mt: 3 }}>{redirectMessage}</Alert>
+          {Object.values(flagged).filter(Boolean).length > 0 && (
+            <Typography variant="body2" color="error.main">Flagged: {questions.filter(q => flagged[q.id]).map((q, i, arr) => `Q${questions.findIndex(qq => qq.id === q.id) + 1}${i < arr.length - 1 ? ', ' : ''}`)}</Typography>
+          )}
+          {Object.values(markedForReview).filter(Boolean).length > 0 && (
+            <Typography variant="body2" color="info.main">Marked for Review: {questions.filter(q => markedForReview[q.id]).map((q, i, arr) => `Q${questions.findIndex(qq => qq.id === q.id) + 1}${i < arr.length - 1 ? ', ' : ''}`)}</Typography>
+          )}
+          {Object.values(bookmarked).filter(Boolean).length > 0 && (
+            <Typography variant="body2" color="warning.main">Bookmarked: {questions.filter(q => bookmarked[q.id]).map((q, i, arr) => `Q${questions.findIndex(qq => qq.id === q.id) + 1}${i < arr.length - 1 ? ', ' : ''}`)}</Typography>
           )}
         </DialogContent>
         <DialogActions>
@@ -1533,23 +1781,39 @@ export default function AttemptQuizPage() {
         />
       )}
 
-      {/* Resume Notification */}
+      {/* Last Minute Warning */}
       <Snackbar
-        open={resumeNotification}
-        onClose={() => setResumeNotification(false)}
+        open={showLastMinuteWarning}
+        onClose={() => setShowLastMinuteWarning(false)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        autoHideDuration={10000}
+      >
+        <Alert severity="warning" sx={{ width: '100%', fontWeight: 600, fontSize: '1.1rem' }}>
+          Only 1 minute left! Please review and submit your answers.
+        </Alert>
+      </Snackbar>
+
+      {/* Restored Notification */}
+      <Snackbar
+        open={restoredNotification}
+        autoHideDuration={3000}
+        onClose={() => setRestoredNotification(false)}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       >
-        <Alert
-          severity="info"
-          onClose={() => setResumeNotification(false)}
-          sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-          action={
-            <Button color="inherit" size="small" onClick={() => setResumeNotification(false)}>
-              Resume Quiz
-            </Button>
-          }
-        >
-          Your previous progress has been restored. You can continue your quiz from where you left off.
+        <Alert severity="info" sx={{ width: '100%' }}>
+          Your answers have been restored.
+        </Alert>
+      </Snackbar>
+
+      {/* Thank You Snackbar after submission */}
+      <Snackbar
+        open={showSubmitThankYou}
+        autoHideDuration={4000}
+        onClose={() => setShowSubmitThankYou(false)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert severity="success" sx={{ width: '100%' }}>
+          Thank you for submitting your quiz!
         </Alert>
       </Snackbar>
     </Box>
