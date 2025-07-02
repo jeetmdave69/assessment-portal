@@ -73,37 +73,7 @@ export default function QuizTable({ quizzes }: QuizTableProps) {
   }, []);
 
   const deleteQuiz = async (id: number) => {
-    const confirmDelete = confirm('Are you sure you want to delete this quiz and its questions?');
-    if (!confirmDelete) return;
-
-    try {
-      const { error: deleteQuestionsError } = await supabase
-        .from('questions')
-        .delete()
-        .eq('quiz_id', id);
-
-      if (deleteQuestionsError) {
-        console.error('❌ Failed to delete related questions:', deleteQuestionsError.message);
-        alert('Failed to delete quiz questions.');
-        return;
-      }
-
-      const { error: deleteQuizError } = await supabase
-        .from('quizzes')
-        .delete()
-        .eq('id', id);
-
-      if (deleteQuizError) {
-        console.error('❌ Error deleting quiz:', deleteQuizError.message);
-        alert('Failed to delete quiz.');
-        return;
-      }
-
-      alert('✅ Quiz deleted successfully!');
-    } catch (err) {
-      console.error('❌ Unexpected error:', err);
-      alert('Unexpected error occurred while deleting quiz.');
-    }
+    // Implement the custom dialog for delete confirmation
   };
 
   const regenerateCode = async (id: number) => {

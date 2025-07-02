@@ -6,19 +6,18 @@ import {
   Box,
   Container,
   Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  CircularProgress,
-  Paper,
+  Grid,
+  Card,
+  CardContent,
+  CardActions,
   Button,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   TextField,
+  CircularProgress,
+  Paper,
 } from '@mui/material';
 import { supabase } from '@/utils/supabaseClient';
 
@@ -29,6 +28,7 @@ interface Attempt {
   user_name: string;
   score: number;
   submitted_at: string;
+  marked_for_review?: Record<string, boolean>;
 }
 
 export default function QuizResultsPage() {
@@ -56,7 +56,8 @@ export default function QuizResultsPage() {
           user_id,
           user_name,
           score,
-          submitted_at
+          submitted_at,
+          marked_for_review
         `)
         .eq('quiz_id', Number(quizId))
         .order('submitted_at', { ascending: false });
@@ -130,46 +131,52 @@ export default function QuizResultsPage() {
       {attempts.length === 0 ? (
         <Typography sx={{ mt: 3 }}>No attempts found for this quiz yet.</Typography>
       ) : (
-        <Paper elevation={3} sx={{ mt: 3, overflowX: 'auto' }}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Attempt ID</TableCell>
-                <TableCell>User Name</TableCell>
-                <TableCell>Score</TableCell>
-                <TableCell>Submitted At</TableCell>
-                <TableCell align="center">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {attempts.map((attempt) => (
-                <TableRow key={attempt.id}>
-                  <TableCell>{attempt.id}</TableCell>
-                  <TableCell>{attempt.user_name}</TableCell>
-                  <TableCell>{attempt.score}</TableCell>
-                  <TableCell>{new Date(attempt.submitted_at).toLocaleString()}</TableCell>
-                  <TableCell align="center">
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => router.push(`/result/${attempt.id}`)}
-                      sx={{ mr: 1 }}
-                    >
-                      View Submission
-                    </Button>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={() => handleOpenEdit(attempt.id, attempt.score)}
-                    >
-                      Edit Score
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Paper>
+        <Grid container spacing={3} sx={{ mt: 3 }}>
+          {attempts.map((attempt) => (
+            <Grid item xs={12} sm={6} md={4} lg={3} key={attempt.id}>
+              <Card elevation={3}>
+                <CardContent>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    Attempt ID: {attempt.id}
+                  </Typography>
+                  <Typography variant="h6" fontWeight={600} gutterBottom>
+                    {attempt.user_name}
+                  </Typography>
+                  <Typography variant="body1" fontWeight={500}>
+                    Score: {attempt.score}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Submitted: {new Date(attempt.submitted_at).toLocaleString()}
+                  </Typography>
+                  {attempt.marked_for_review && Object.keys(attempt.marked_for_review).length > 0 && (
+                    <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+                      Marked for Review: {Object.keys(attempt.marked_for_review)
+                        .filter(qid => attempt.marked_for_review && attempt.marked_for_review[qid])
+                        .map((qid, idx) => `Q${Number(qid) + 1}`)
+                        .join(', ')}
+                    </Typography>
+                  )}
+                </CardContent>
+                <CardActions>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => router.push(`/result/${attempt.id}`)}
+                  >
+                    View Submission
+                  </Button>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={() => handleOpenEdit(attempt.id, attempt.score)}
+                  >
+                    Edit Score
+                  </Button>
+                </CardActions>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
       )}
 
       <Dialog open={editOpen} onClose={() => setEditOpen(false)}>

@@ -26,6 +26,11 @@ const teacherOnlyRoutes = createRouteMatcher([
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
+  // Never redirect to access-denied for sign-in page
+  if (req.nextUrl.pathname.startsWith('/sign-in')) {
+    return NextResponse.next();
+  }
+
   // Only protect certain routes
   if (!isProtectedRoute(req)) return NextResponse.next();
 
@@ -38,12 +43,12 @@ export default clerkMiddleware(async (auth, req) => {
 
   // Student cannot access teacher/admin pages
   if (role === 'student' && teacherOnlyRoutes(req)) {
-    return NextResponse.redirect(new URL('/unauthorized/access-denied', req.url));
+    return NextResponse.redirect(new URL('/sign-in', req.url));
   }
 
   // Teacher cannot access student pages
   if (role === 'teacher' && studentOnlyRoutes(req)) {
-    return NextResponse.redirect(new URL('/unauthorized/access-denied', req.url));
+    return NextResponse.redirect(new URL('/sign-in', req.url));
   }
 
   // Admin can access everything

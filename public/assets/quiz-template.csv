@@ -1,0 +1,16 @@
+section,question,option1,option2,option3,option4,correct_answers,marks,explanation
+Mathematics,What is 5 × 7?,25,30,35,40,35,1,Basic multiplication
+Mathematics,Which are prime numbers?,4,7,12,19,7;19,2,Prime numbers have exactly two factors
+Science,What is the chemical symbol for sodium?,So,Sd,Na,Fe,Na,1,From Latin "natrium"
+Science,Select all mammals,Dolphin,Eagle,Shark,Bat,Dolphin;Bat,2,Mammals nurse their young
+History,Who painted the Mona Lisa?,Michelangelo,Da Vinci,Picasso,Van Gogh,Da Vinci,1,Painted in the Renaissance
+History,Which were Axis powers in WWII?,USA,Germany,Japan,UK,Germany;Japan,2,Axis opposed the Allies
+Technology,What does "AI" stand for?,Automated Interface,Artificial Intelligence,Advanced Internet,Applied Integration,Artificial Intelligence,1,AI mimics human intelligence
+Technology,Select all database systems,MySQL,Photoshop,MongoDB,Excel,MySQL;MongoDB,2,MySQL and MongoDB are databases
+Literature,Who wrote "To Kill a Mockingbird"?,Mark Twain,Harper Lee,J.K. Rowling,Ernest Hemingway,Harper Lee,1,Published in 1960
+Literature,Which are Shakespearean comedies?,Hamlet,A Midsummer Night's Dream,Macbeth,Twelfth Night,A Midsummer Night's Dream;Twelfth Night,2,Comedies have happy endings
+Sports,How many players in a basketball team?,4,5,6,7,5,1,FIBA rules require 5 players
+Sports,Select all Grand Slam tennis tournaments,Wimbledon,US Open,Super Bowl,Australian Open,Wimbledon;US Open;Australian Open,3,Super Bowl is football
+Edge Case,Empty option test,Correct,,Wrong,,Correct,1,Option2 and Option4 are empty
+Edge Case,All options correct,A,B,C,D,A;B;C;D,4,Select all options
+Edge Case,Special chars in text,"Yes, comma",No semicolon; here,"Quote""test",Normal,"Yes, comma",1,Tests CSV escaping 
